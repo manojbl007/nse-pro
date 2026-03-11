@@ -1649,26 +1649,67 @@ function rotateTip(){
 // ══════════════════════════════════════════════
 // MAIN SCAN
 // ══════════════════════════════════════════════
-function runScan(){
-  const btn=document.getElementById('scanBtn');
-  btn.classList.add('scanning');btn.disabled=true;
-  document.getElementById('scanTxt').textContent='SCANNING 150 STOCKS…';
-  document.getElementById('scanIcon').textContent='⟳';
+async function runScan(){
+
+  const btn = document.getElementById('scanBtn');
+
+  btn.classList.add('scanning');
+  btn.disabled = true;
+
+  document.getElementById('scanTxt').textContent = "SCANNING LIVE NSE DATA...";
+  document.getElementById('scanIcon').textContent = "⟳";
+
+  // fetch live prices if Zerodha connected
+  if(apiConnected){
+
+    for(const stock of UNIVERSE){
+
+      const live = await fetchLivePrice(stock.s);
+
+      if(live){
+        stock.px = live.price;
+        stock.liveChg = live.chg;
+        stock.liveVol = live.vol;
+      }
+
+    }
+
+  }
+
   setTimeout(()=>{
-    const idxData=updateIndices();
-    const results=runScanEngine(idxData);
-    scanResults=results;
-    renderList('long');renderList('short');renderList('any');
+
+    const idxData = updateIndices();
+
+    const results = runScanEngine(idxData);
+
+    scanResults = results;
+
+    renderList('long');
+    renderList('short');
+    renderList('any');
+
     checkAlerts(results);
     rotateTip();
-    btn.classList.remove('scanning');btn.disabled=false;
-    document.getElementById('scanTxt').textContent='SCAN 150 STOCKS NOW';
-    document.getElementById('scanIcon').textContent='▶';
-    document.getElementById('cnt-long').textContent=applyFilter(results.long).length;
-    document.getElementById('cnt-short').textContent=applyFilter(results.short).length;
-    document.getElementById('cnt-any').textContent=applyFilter(results.any).length;
+
+    btn.classList.remove('scanning');
+    btn.disabled = false;
+
+    document.getElementById('scanTxt').textContent = "SCAN 150 STOCKS NOW";
+    document.getElementById('scanIcon').textContent = "▶️";
+
+    document.getElementById('cnt-long').textContent =
+      applyFilter(results.long).length;
+
+    document.getElementById('cnt-short').textContent =
+      applyFilter(results.short).length;
+
+    document.getElementById('cnt-any').textContent =
+      applyFilter(results.any).length;
+
     resetCountdown();
+
   },1200);
+
 }
 
 // ══════════════════════════════════════════════
