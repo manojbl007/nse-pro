@@ -1217,7 +1217,7 @@ let volRaw;
 if(apiConnected && stock.liveChg !== undefined){
 
   chg = stock.liveChg;
-  volRaw = Math.max(1.2, stock.liveVol / 200000);
+  volRaw = Math.max(1.2, stock.liveVol / 500000);
 
 }else{
 
@@ -1235,7 +1235,7 @@ if(apiConnected && stock.liveChg !== undefined){
     const isFirstTouch = sr()>0.38;
     const isLong = chg>0;
     const price = apiConnected ? stock.px : stock.px*(1+chg/100);
-    const slPct = Math.max(0.8,Math.abs(chg)*0.38);
+    const price = stock.px;
     const tgtPct = slPct*2.5;
     const sl = isLong?price*(1-slPct/100):price*(1+slPct/100);
     const tgt = isLong?price*(1+tgtPct/100):price*(1-tgtPct/100);
