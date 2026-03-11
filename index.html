@@ -1234,7 +1234,7 @@ if(apiConnected && stock.liveChg !== undefined){
     const consolRange = 0.3+sr()*2.5;
     const isFirstTouch = sr()>0.38;
     const isLong = chg>0;
-    const price = stock.px*(1+chg/100);
+    const price = apiConnected ? stock.px : stock.px*(1+chg/100);
     const slPct = Math.max(0.8,Math.abs(chg)*0.38);
     const tgtPct = slPct*2.5;
     const sl = isLong?price*(1-slPct/100):price*(1+slPct/100);
