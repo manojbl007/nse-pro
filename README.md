@@ -1,2 +1,0 @@
-# nse-pro
-Intraday screening 
