@@ -1203,7 +1203,7 @@ function getSignalPill(sm, vol, isLong){
 // ══════════════════════════════════════════════
 function runScanEngine(idxData){
   const seed = Math.floor(Date.now()/300000);
-  const r = rng(seed);
+const r = apiConnected ? null : rng(seed);
   const allData = [];
   // cache rng per stock for consistency
   const stockRngs = {};
