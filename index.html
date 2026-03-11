@@ -1211,10 +1211,23 @@ function runScanEngine(idxData){
 
   UNIVERSE.forEach(stock=>{
     const sr = stockRngs[stock.s];
-    const chgMag = sr()*7;
-    const chgDir = sr()>0.47?1:-1;
-    const chg = chgDir*chgMag;
-    const volRaw = 1.2+sr()*8;
+    let chg;
+let volRaw;
+
+if(apiConnected && stock.liveChg !== undefined){
+
+  chg = stock.liveChg;
+  volRaw = Math.max(1.2, stock.liveVol / 200000);
+
+}else{
+
+  const chgMag = sr()*7;
+  const chgDir = sr()>0.47?1:-1;
+  chg = chgDir*chgMag;
+
+  volRaw = 1.2 + sr()*8;
+
+}
     const gap = (sr()-0.5)*3;
     const secAvg = sectorPerf[stock.sec]?.avg||0;
     const excess = chg - marketChg;
