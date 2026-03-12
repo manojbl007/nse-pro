@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NSE PRO V3</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Share+Tech+Mono&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#070809;--panel:#0c0e10;--card:#111318;--border:#1a1f26;--gold:#f0b429;--gold2:#c98a00;--green:#00e676;--red:#ff3d57;--text:#e8edf2;--text2:#8a9bb0;--text3:#4a5568;--amber:#ffab00;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;}
+.hdr{background:var(--panel);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100;}
+.logo{font-family:'Bebas Neue';font-size:1.4rem;color:var(--gold);letter-spacing:.15em;}
+.sub{font-family:'Share Tech Mono';font-size:.65rem;color:var(--text2);letter-spacing:.2em;}
+.hright{display:flex;align-items:center;gap:10px;}
+.badge{font-family:'Share Tech Mono';font-size:.6rem;padding:4px 10px;border-radius:20px;display:flex;align-items:center;gap:5px;}
+.open{background:rgba(0,230,118,.1);color:var(--green);border:1px solid rgba(0,230,118,.3);}
+.closed{background:rgba(255,61,87,.1);color:var(--red);border:1px solid rgba(255,61,87,.3);}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor;animation:blink 1.5s infinite;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.clk{font-family:'Share Tech Mono';font-size:.75rem;color:var(--text2);}
+.box{margin:12px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;}
+.lbl{font-family:'Share Tech Mono';font-size:.5rem;letter-spacing:.15em;color:var(--gold);margin-bottom:10px;}
+.btn-login{width:100%;padding:13px;border:none;background:linear-gradient(135deg,#c98a00,#f0b429);color:#000;font-family:'Share Tech Mono';font-size:.65rem;letter-spacing:.1em;border-radius:6px;cursor:pointer;font-weight:bold;}
+.msg{font-family:'Share Tech Mono';font-size:.5rem;margin-top:8px;padding:7px 10px;border-radius:4px;}
+.ok{background:rgba(0,230,118,.1);color:var(--green);border:1px solid rgba(0,230,118,.2);}
+.err{background:rgba(255,61,87,.1);color:var(--red);border:1px solid rgba(255,61,87,.2);}
+.info{background:rgba(240,180,41,.1);color:var(--amber);border:1px solid rgba(240,180,41,.2);}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 12px 12px;}
+.icard{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 12px;}
+.iname{font-family:'Share Tech Mono';font-size:.45rem;color:var(--text2);letter-spacing:.1em;margin-bottom:4px;}
+.ival{font-family:'Bebas Neue';font-size:1.1rem;}
+.ichg{font-family:'Share Tech Mono';font-size:.5rem;margin-top:2px;}
+.up{color:var(--green);}.dn{color:var(--red);}.na{color:var(--text3);}
+.sec-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;}
+.sec-item{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;}
+.sname{font-family:'Share Tech Mono';font-size:.45rem;color:var(--text2);}
+.schg{font-family:'Share Tech Mono';font-size:.5rem;font-weight:bold;}
+.scn-wrap{padding:0 12px 12px;}
+.btn-scan{width:100%;padding:13px;border:1px solid var(--gold2);background:var(--card);color:var(--gold);font-family:'Share Tech Mono';font-size:.65rem;letter-spacing:.15em;border-radius:8px;cursor:pointer;}
+.btn-scan:disabled{opacity:.4;cursor:not-allowed;}
+.filters{display:flex;gap:6px;overflow-x:auto;padding:0 12px 10px;scrollbar-width:none;}
+.filters::-webkit-scrollbar{display:none;}
+.fbtn{flex-shrink:0;padding:5px 12px;background:var(--card);border:1px solid var(--border);color:var(--text2);font-family:'Share Tech Mono';font-size:.48rem;border-radius:20px;cursor:pointer;}
+.fbtn.on{background:rgba(240,180,41,.1);border-color:var(--gold);color:var(--gold);}
+.sum{display:flex;gap:8px;margin-bottom:10px;}
+.si{flex:1;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px;text-align:center;}
+.sv{font-family:'Bebas Neue';font-size:1rem;}
+.sl{font-family:'Share Tech Mono';font-size:.42rem;color:var(--text3);margin-top:2px;}
+.list{padding:0 12px 80px;}
+.sc{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;}
+.sc.buy{border-left:3px solid var(--green);}
+.sc.sell{border-left:3px solid var(--red);}
+.sc.watch{border-left:3px solid var(--amber);}
+.sn{font-family:'Share Tech Mono';font-size:.6rem;}
+.ss{font-size:.45rem;color:var(--text3);margin-top:2px;}
+.sp{font-family:'Bebas Neue';font-size:1rem;}
+.sv2{font-family:'Share Tech Mono';font-size:.42rem;color:var(--text2);margin-top:2px;}
+.sig{display:inline-block;padding:2px 8px;border-radius:3px;font-family:'Share Tech Mono';font-size:.42rem;margin-top:4px;}
+.sbuy{background:rgba(0,230,118,.15);color:var(--green);border:1px solid rgba(0,230,118,.3);}
+.ssell{background:rgba(255,61,87,.15);color:var(--red);border:1px solid rgba(255,61,87,.3);}
+.swat{background:rgba(255,171,0,.15);color:var(--amber);border:1px solid rgba(255,171,0,.3);}
+.empty{text-align:center;padding:40px 20px;color:var(--text3);font-family:'Share Tech Mono';font-size:.55rem;line-height:2.2;}
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <div><div class="logo">NSE PRO</div><div class="sub">V3 · NIFTY50</div></div>
+  <div class="hright">
+    <div class="badge closed" id="mkt"><div class="dot"></div><span id="mktTxt">CLOSED</span></div>
+    <div class="clk" id="clk">00:00:00</div>
+  </div>
+</div>
+
+<div class="box">
+  <div class="lbl">⚡ ZERODHA LIVE CONNECTION</div>
+  <button class="btn-login" id="btnLogin" onclick="doLogin()">🔑 LOGIN WITH ZERODHA — TAP EVERY MORNING</button>
+  <div class="msg info" id="msg">Not connected — tap login before 9:15 AM</div>
+</div>
+
+<div class="grid2">
+  <div class="icard"><div class="iname">NIFTY 50</div><div class="ival na" id="i0">—</div><div class="ichg na" id="ic0">—</div></div>
+  <div class="icard"><div class="iname">BANK NIFTY</div><div class="ival na" id="i1">—</div><div class="ichg na" id="ic1">—</div></div>
+  <div class="icard"><div class="iname">NIFTY IT</div><div class="ival na" id="i2">—</div><div class="ichg na" id="ic2">—</div></div>
+  <div class="icard"><div class="iname">NIFTY AUTO</div><div class="ival na" id="i3">—</div><div class="ichg na" id="ic3">—</div></div>
+</div>
+
+<div class="box" style="margin-top:0">
+  <div class="lbl">📊 SECTOR STRENGTH</div>
+  <div class="sec-grid">
+    <div class="sec-item"><span class="sname">BANKING</span><span class="schg na" id="s0">—</span></div>
+    <div class="sec-item"><span class="sname">IT</span><span class="schg na" id="s1">—</span></div>
+    <div class="sec-item"><span class="sname">AUTO</span><span class="schg na" id="s2">—</span></div>
+    <div class="sec-item"><span class="sname">METALS</span><span class="schg na" id="s3">—</span></div>
+    <div class="sec-item"><span class="sname">ENERGY</span><span class="schg na" id="s4">—</span></div>
+    <div class="sec-item"><span class="sname">PHARMA</span><span class="schg na" id="s5">—</span></div>
+  </div>
+</div>
+
+<div class="scn-wrap">
+  <button class="btn-scan" id="btnScan" onclick="runScan()" disabled>▶ SCAN NIFTY 50 STOCKS</button>
+</div>
+
+<div class="filters">
+  <button class="fbtn on" onclick="setF('ALL',this)">ALL</button>
+  <button class="fbtn" onclick="setF('BUY',this)">🟢 BUY</button>
+  <button class="fbtn" onclick="setF('SELL',this)">🔴 SELL</button>
+  <button class="fbtn" onclick="setF('VOL',this)">🔥 VOL SPIKE</button>
+  <button class="fbtn" onclick="setF('TOP',this)">⚡ TOP MOVERS</button>
+</div>
+
+<div class="list">
+  <div id="sum" style="display:none" class="sum">
+    <div class="si"><div class="sv up" id="nBuy">0</div><div class="sl">BUY</div></div>
+    <div class="si"><div class="sv dn" id="nSell">0</div><div class="sl">SELL</div></div>
+    <div class="si"><div class="sv" style="color:var(--amber)" id="nWatch">0</div><div class="sl">WATCH</div></div>
+    <div class="si"><div class="sv" style="color:#2979ff" id="nVol">0</div><div class="sl">VOL SPIKE</div></div>
+  </div>
+  <div id="stockList"><div class="empty">Connect Zerodha above<br>then tap SCAN for live signals<br><br>Real NSE prices only</div></div>
+</div>
+
+<script>
+var AK='8b3clv6hwxt6s0r2',AS='b2emvvad0opehvttecysnvikzp7typb8';
+var WK='https://raspy-cherry-dfee.manojbl6789.workers.dev';
+var ME='https://manojbl007.github.io/nse-pro/nse-pro-v3.html';
+var tok=null,stocks=[],filt='ALL';
+
+var SYMS=[
+ ['NSE:RELIANCE','RELIANCE','ENERGY'],['NSE:TCS','TCS','IT'],['NSE:HDFCBANK','HDFCBANK','BANKING'],
+ ['NSE:BHARTIARTL','BHARTIARTL','TELECOM'],['NSE:ICICIBANK','ICICIBANK','BANKING'],
+ ['NSE:INFOSYS','INFOSYS','IT'],['NSE:SBIN','SBIN','BANKING'],['NSE:HINDUNILVR','HINDUNILVR','FMCG'],
+ ['NSE:ITC','ITC','FMCG'],['NSE:LT','LT','INFRA'],['NSE:KOTAKBANK','KOTAKBANK','BANKING'],
+ ['NSE:HCLTECH','HCLTECH','IT'],['NSE:AXISBANK','AXISBANK','BANKING'],['NSE:WIPRO','WIPRO','IT'],
+ ['NSE:MARUTI','MARUTI','AUTO'],['NSE:ASIANPAINT','ASIANPAINT','PAINTS'],
+ ['NSE:TATAMOTORS','TATAMOTORS','AUTO'],['NSE:NESTLEIND','NESTLEIND','FMCG'],
+ ['NSE:ULTRACEMCO','ULTRACEMCO','CEMENT'],['NSE:SUNPHARMA','SUNPHARMA','PHARMA'],
+ ['NSE:BAJFINANCE','BAJFINANCE','FINANCE'],['NSE:ONGC','ONGC','ENERGY'],
+ ['NSE:TATASTEEL','TATASTEEL','METALS'],['NSE:NTPC','NTPC','ENERGY'],
+ ['NSE:POWERGRID','POWERGRID','ENERGY'],['NSE:M&M','M&M','AUTO'],
+ ['NSE:ADANIENT','ADANIENT','INFRA'],['NSE:JSWSTEEL','JSWSTEEL','METALS'],
+ ['NSE:TITAN','TITAN','CONSUMER'],['NSE:BAJAJFINSV','BAJAJFINSV','FINANCE'],
+ ['NSE:DRREDDY','DRREDDY','PHARMA'],['NSE:CIPLA','CIPLA','PHARMA'],
+ ['NSE:TECHM','TECHM','IT'],['NSE:HDFCLIFE','HDFCLIFE','FINANCE'],
+ ['NSE:SBILIFE','SBILIFE','FINANCE'],['NSE:BRITANNIA','BRITANNIA','FMCG'],
+ ['NSE:DIVISLAB','DIVISLAB','PHARMA'],['NSE:EICHERMOT','EICHERMOT','AUTO'],
+ ['NSE:HEROMOTOCO','HEROMOTOCO','AUTO'],['NSE:BPCL','BPCL','ENERGY'],
+ ['NSE:HINDALCO','HINDALCO','METALS'],['NSE:GRASIM','GRASIM','CEMENT'],
+ ['NSE:TATACONSUM','TATACONSUM','FMCG'],['NSE:COALINDIA','COALINDIA','ENERGY'],
+ ['NSE:APOLLOHOSP','APOLLOHOSP','PHARMA'],['NSE:ADANIPORTS','ADANIPORTS','INFRA'],
+ ['NSE:INDUSINDBK','INDUSINDBK','BANKING'],['NSE:SHRIRAMFIN','SHRIRAMFIN','FINANCE'],
+ ['NSE:BEL','BEL','DEFENCE'],['NSE:BAJAJ-AUTO','BAJAJ-AUTO','AUTO']
+];
+
+var IX=['NSE:NIFTY 50','NSE:NIFTY BANK','NSE:NIFTY IT','NSE:NIFTY AUTO'];
+
+// CLOCK
+function tick(){
+  var n=new Date(),h=n.getHours(),m=n.getMinutes(),s=n.getSeconds();
+  document.getElementById('clk').textContent=pad(h)+':'+pad(m)+':'+pad(s);
+  var op=(h>9||(h==9&&m>=15))&&(h<15||(h==15&&m<=30));
+  document.getElementById('mkt').className='badge '+(op?'open':'closed');
+  document.getElementById('mktTxt').textContent=op?'OPEN':'CLOSED';
+}
+function pad(x){return x<10?'0'+x:''+x;}
+setInterval(tick,1000);tick();
+
+// STATUS
+function setMsg(t,c){var e=document.getElementById('msg');e.textContent=t;e.className='msg '+c;}
+
+// LOGIN
+function doLogin(){window.location.href='https://kite.trade/connect/login?api_key='+AK+'&v=3';}
+
+// CONNECTED
+function connected(t){
+  tok=t;
+  try{localStorage.setItem('tok_'+new Date().toDateString(),t);}catch(e){}
+  setMsg('✓ LIVE — Token valid until midnight','ok');
+  document.getElementById('btnLogin').textContent='✓ CONNECTED — Tap to re-login';
+  document.getElementById('btnScan').disabled=false;
+  loadIdx();
+}
+
+// CHECK SAVED TOKEN
+function checkSaved(){
+  try{var t=localStorage.getItem('tok_'+new Date().toDateString());if(t){connected(t);return true;}}catch(e){}
+  return false;
+}
+
+// AUTO DETECT ON LOAD
+window.addEventListener('load',function(){
+  var p=new URLSearchParams(window.location.search);
+  var at=p.get('access_token'),rt=p.get('request_token'),st=p.get('status'),er=p.get('auth_error');
+  history.replaceState({},'',location.pathname);
+  if(at){setMsg('● Token received…','info');connected(at);}
+  else if(er){setMsg('✗ '+decodeURIComponent(er),'err');checkSaved();}
+  else if(rt&&st==='success'){
+    setMsg('● Exchanging token…','info');
+    // Use Web Crypto for correct SHA256
+    var str=AK+rt+AS;
+    crypto.subtle.digest('SHA-256',new TextEncoder().encode(str)).then(function(buf){
+      var hex=Array.from(new Uint8Array(buf)).map(function(b){return b.toString(16).padStart(2,'0');}).join('');
+      window.location.href=WK+'?action=exchange&api_key='+AK+'&request_token='+encodeURIComponent(rt)+'&checksum='+hex+'&redirect='+encodeURIComponent(ME);
+    });
+  }
+  else{checkSaved();}
+});
+
+// LOAD INDICES
+function loadIdx(){
+  if(!tok)return;
+  var q=IX.map(function(s){return'i='+encodeURIComponent(s);}).join('&');
+  fetch('https://api.kite.trade/quote?'+q,{headers:{'X-Kite-Version':'3','Authorization':'token '+AK+':'+tok}})
+  .then(function(r){return r.json();}).then(function(d){
+    if(d.status!=='success')return;
+    IX.forEach(function(sym,i){
+      var q=d.data[sym];if(!q)return;
+      var c=((q.last_price-q.ohlc.close)/q.ohlc.close*100).toFixed(2);
+      var cl=c>=0?'up':'dn';
+      document.getElementById('i'+i).textContent=q.last_price.toLocaleString('en-IN');
+      document.getElementById('i'+i).className='ival '+cl;
+      document.getElementById('ic'+i).textContent=(c>=0?'+':'')+c+'%';
+      document.getElementById('ic'+i).className='ichg '+cl;
+    });
+  }).catch(function(){});
+}
+
+// SCAN
+function runScan(){
+  if(!tok){setMsg('Login first!','err');return;}
+  document.getElementById('btnScan').disabled=true;
+  document.getElementById('btnScan').textContent='⟳ SCANNING…';
+  document.getElementById('stockList').innerHTML='<div class="empty">Fetching live prices…</div>';
+  var h={'X-Kite-Version':'3','Authorization':'token '+AK+':'+tok};
+  var b1=SYMS.slice(0,25).map(function(s){return'i='+encodeURIComponent(s[0]);}).join('&');
+  var b2=SYMS.slice(25).map(function(s){return'i='+encodeURIComponent(s[0]);}).join('&');
+  Promise.all([
+    fetch('https://api.kite.trade/quote?'+b1,{headers:h}).then(function(r){return r.json();}),
+    fetch('https://api.kite.trade/quote?'+b2,{headers:h}).then(function(r){return r.json();})
+  ]).then(function(rs){
+    var data=Object.assign({},(rs[0].data||{}),(rs[1].data||{}));
+    process(data);
+  }).catch(function(e){
+    document.getElementById('stockList').innerHTML='<div class="empty">Error: '+e.message+'</div>';
+  }).finally(function(){
+    document.getElementById('btnScan').disabled=false;
+    document.getElementById('btnScan').textContent='▶ SCAN NIFTY 50 STOCKS';
+  });
+}
+
+function process(data){
+  stocks=[];
+  SYMS.forEach(function(s){
+    var q=data[s[0]];if(!q)return;
+    var p=q.last_price,pv=q.ohlc.close,chg=(p-pv)/pv*100;
+    var vs=q.volume_traded>500000;
+    var sig=chg>1?'BUY':chg<-1?'SELL':chg>0.3?'BUY':chg<-0.3?'SELL':'WATCH';
+    stocks.push({sym:s[1],sec:s[2],price:p,chg:chg,sig:sig,vs:vs,vol:q.volume_traded});
+  });
+  stocks.sort(function(a,b){return Math.abs(b.chg)-Math.abs(a.chg);});
+  // sectors
+  ['BANKING','IT','AUTO','METALS','ENERGY','PHARMA'].forEach(function(sec,i){
+    var ss=stocks.filter(function(s){return s.sec===sec;});
+    if(!ss.length)return;
+    var avg=ss.reduce(function(a,s){return a+s.chg;},0)/ss.length;
+    var el=document.getElementById('s'+i);
+    el.textContent=(avg>=0?'+':'')+avg.toFixed(2)+'%';
+    el.className='schg '+(avg>=0?'up':'dn');
+  });
+  document.getElementById('nBuy').textContent=stocks.filter(function(s){return s.sig==='BUY';}).length;
+  document.getElementById('nSell').textContent=stocks.filter(function(s){return s.sig==='SELL';}).length;
+  document.getElementById('nWatch').textContent=stocks.filter(function(s){return s.sig==='WATCH';}).length;
+  document.getElementById('nVol').textContent=stocks.filter(function(s){return s.vs;}).length;
+  document.getElementById('sum').style.display='flex';
+  render();
+}
+
+function render(){
+  var list=stocks;
+  if(filt==='BUY')list=stocks.filter(function(s){return s.sig==='BUY';});
+  if(filt==='SELL')list=stocks.filter(function(s){return s.sig==='SELL';});
+  if(filt==='VOL')list=stocks.filter(function(s){return s.vs;});
+  if(filt==='TOP')list=stocks.slice(0,15);
+  if(!list.length){document.getElementById('stockList').innerHTML='<div class="empty">No stocks match</div>';return;}
+  document.getElementById('stockList').innerHTML=list.map(function(s){
+    var cs=s.chg>=0?'up':'dn',cc=s.sig==='BUY'?'buy':s.sig==='SELL'?'sell':'watch';
+    var sc=s.sig==='BUY'?'sbuy':s.sig==='SELL'?'ssell':'swat';
+    var v=s.vs?'🔥 VOL SPIKE':'Vol:'+(s.vol/100000).toFixed(1)+'L';
+    var ch=(s.chg>=0?'+':'')+s.chg.toFixed(2)+'%';
+    return'<div class="sc '+cc+'"><div><div class="sn">'+s.sym+'</div><div class="ss">'+s.sec+'</div></div><div style="text-align:center"><div class="sp">₹'+s.price.toLocaleString('en-IN')+'</div><div class="sv2">'+v+'</div></div><div style="text-align:right"><div class="ichg '+cs+'">'+ch+'</div><div class="sig '+sc+'">'+s.sig+'</div></div></div>';
+  }).join('');
+}
+
+function setF(f,btn){
+  filt=f;
+  document.querySelectorAll('.fbtn').forEach(function(b){b.classList.remove('on');});
+  btn.classList.add('on');
+  if(stocks.length)render();
+}
+</script>
+</body>
+</html>
