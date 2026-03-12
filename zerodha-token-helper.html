@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zerodha Token Helper</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#070809;color:#c8d6e5;font-family:'Courier New',monospace;padding:20px;min-height:100vh;}
+h2{color:#f0b429;margin-bottom:16px;font-size:1.1rem;letter-spacing:0.1em;}
+.card{background:#0f1215;border:1px solid #1a1f26;border-radius:12px;padding:16px;margin-bottom:14px;}
+label{font-size:0.6rem;color:#3d5068;letter-spacing:0.15em;text-transform:uppercase;display:block;margin-bottom:5px;}
+input{width:100%;background:#141820;border:1px solid #222b35;color:#c8d6e5;padding:10px;border-radius:7px;font-family:'Courier New',monospace;font-size:0.75rem;outline:none;margin-bottom:10px;}
+input:focus{border-color:#f0b429;}
+button{width:100%;padding:12px;border-radius:8px;background:rgba(240,180,41,0.12);border:1px solid rgba(240,180,41,0.3);color:#f0b429;font-family:'Courier New',monospace;font-size:0.7rem;font-weight:600;letter-spacing:0.15em;text-transform:uppercase;cursor:pointer;margin-bottom:8px;}
+button:active{opacity:0.7;}
+.status{font-size:0.65rem;padding:10px;border-radius:7px;margin-top:8px;line-height:1.6;word-break:break-all;}
+.ok{background:rgba(0,230,118,0.08);border:1px solid rgba(0,230,118,0.2);color:#00e676;}
+.err{background:rgba(255,61,87,0.08);border:1px solid rgba(255,61,87,0.2);color:#ff3d57;}
+.info{background:rgba(240,180,41,0.08);border:1px solid rgba(240,180,41,0.2);color:#f0b429;}
+.token-box{background:#141820;border:1px solid #00e676;border-radius:8px;padding:12px;margin-top:10px;font-size:0.7rem;color:#00e676;word-break:break-all;display:none;}
+.copy-btn{background:rgba(0,230,118,0.1);border-color:rgba(0,230,118,0.3);color:#00e676;margin-top:8px;}
+.step{font-size:0.65rem;color:#3d5068;line-height:1.8;margin-bottom:10px;}
+.step b{color:#c8d6e5;}
+.highlight{color:#f0b429;}
+</style>
+</head>
+<body>
+
+<h2>⚡ ZERODHA ACCESS TOKEN HELPER</h2>
+
+<div class="card">
+  <div class="step">
+    This page generates your <b>access_token</b> from the <b>request_token</b> you got after Zerodha login.<br><br>
+    The <span class="highlight">request_token</span> from your URL was:<br>
+    <b style="color:#00e676">oQPTYf2UAyhFyMuBh2sIv8MgUC4IpFiG</b><br><br>
+    ⚠ This token may have expired. If it fails, login again at:<br>
+    <span class="highlight">kite.trade/connect/login?api_key=8b3clv6hwxt6s0r2&v=3</span>
+  </div>
+
+  <label>Request Token</label>
+  <input id="reqToken" value="oQPTYf2UAyhFyMuBh2sIv8MgUC4IpFiG" placeholder="Paste request_token here">
+
+  <button onclick="generate()">🔑 GENERATE ACCESS TOKEN</button>
+  <div class="status info" id="status">Tap the button above to generate your access token.</div>
+
+  <div class="token-box" id="tokenBox"></div>
+  <button class="copy-btn" id="copyBtn" style="display:none" onclick="copyToken()">📋 COPY ACCESS TOKEN</button>
+</div>
+
+<div class="card">
+  <h2 style="font-size:0.8rem;margin-bottom:10px;">HOW TO USE THE ACCESS TOKEN</h2>
+  <div class="step">
+    1. Tap <b>"Generate Access Token"</b> above<br>
+    2. If successful, tap <b>"Copy Access Token"</b><br>
+    3. Open your NSE Pro app:<br>
+    <span class="highlight">manojbl007.github.io/nse-pro/nse-pro-v2-live.html</span><br>
+    4. Scroll to the <b>CORS BLOCKED</b> section<br>
+    5. Paste the access token there<br>
+    6. Tap <b>"Connect"</b><br><br>
+    ✅ Real NSE data will load!
+  </div>
+</div>
+
+<script>
+const API_KEY    = '8b3clv6hwxt6s0r2';
+const API_SECRET = 'b2emvvad0opehvttecysnvikzp7typb8';
+let accessToken  = '';
+
+async function sha256(msg){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(msg));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+async function generate(){
+  const reqToken = document.getElementById('reqToken').value.trim();
+  if(!reqToken){ setStatus('Paste your request_token first','err'); return; }
+
+  setStatus('Generating checksum and calling Zerodha API…','info');
+
+  try{
+    const checksum = await sha256(API_KEY + reqToken + API_SECRET);
+
+    const body = new URLSearchParams({
+      api_key: API_KEY,
+      request_token: reqToken,
+      checksum: checksum
+    });
+
+    const resp = await fetch('https://api.kite.trade/session/token',{
+      method:'POST',
+      headers:{'X-Kite-Version':'3','Content-Type':'application/x-www-form-urlencoded'},
+      body: body.toString()
+    });
+
+    const data = await resp.json();
+
+    if(data.status==='success' && data.data?.access_token){
+      accessToken = data.data.access_token;
+      setStatus('✅ SUCCESS! Access token generated. Copy it and paste in NSE Pro app.','ok');
+      const box = document.getElementById('tokenBox');
+      box.textContent = accessToken;
+      box.style.display = 'block';
+      document.getElementById('copyBtn').style.display = 'block';
+      // Save to localStorage so NSE Pro can read it
+      localStorage.setItem('z_token', accessToken);
+      localStorage.setItem('z_token_date', new Date().toLocaleDateString('en-IN'));
+    } else {
+      setStatus('❌ Zerodha rejected: ' + (data.message||'Token may have expired. Login again and get a fresh request_token.'),'err');
+    }
+  } catch(e){
+    setStatus('❌ Error: ' + e.message + ' — Try opening this page in a different browser (Chrome/Firefox).','err');
+  }
+}
+
+function copyToken(){
+  if(!accessToken) return;
+  navigator.clipboard.writeText(accessToken).then(()=>{
+    document.getElementById('copyBtn').textContent = '✅ COPIED!';
+    setTimeout(()=>document.getElementById('copyBtn').textContent='📋 COPY ACCESS TOKEN',2000);
+  }).catch(()=>{
+    // Fallback
+    const el = document.getElementById('tokenBox');
+    const range = document.createRange();
+    range.selectNode(el);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+    document.execCommand('copy');
+    document.getElementById('copyBtn').textContent = '✅ COPIED!';
+    setTimeout(()=>document.getElementById('copyBtn').textContent='📋 COPY ACCESS TOKEN',2000);
+  });
+}
+
+function setStatus(msg,cls){
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'status ' + cls;
+}
+</script>
+</body>
+</html>
