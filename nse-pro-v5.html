@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="theme-color" content="#070809">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>NSE PRO V5</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Share+Tech+Mono&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="alerts.js"></script>
+<script src="analysis.js"></script>
+<script src="simulation.js"></script>
+<script src="journal.js"></script>
+<script src="scanner.js"></script>
+<style>
+:root{
+  --bg:#070809;--panel:#0c0e10;--card:#0f1215;--card2:#131820;
+  --border:#1a2030;--border2:#222d40;
+  --gold:#f0b429;--gold2:#c98a00;--gold3:rgba(240,180,41,.08);
+  --green:#00e676;--red:#ff3d57;--amber:#ffab00;--blue:#2979ff;--purple:#aa00ff;
+  --text:#e8edf5;--text2:#8a9bb0;--text3:#3d4f66;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;height:100vh;overflow:hidden;display:flex;flex-direction:column;}
+/* ── HEADER ── */
+.hdr{background:var(--panel);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;z-index:50;}
+.logo{font-family:'Bebas Neue';font-size:1.3rem;color:var(--gold);letter-spacing:.15em;line-height:1;}
+.sub{font-family:'Share Tech Mono';font-size:.5rem;color:var(--text2);letter-spacing:.2em;margin-top:1px;}
+.hright{display:flex;align-items:center;gap:8px;}
+.badge{font-family:'Share Tech Mono';font-size:.5rem;padding:3px 8px;border-radius:20px;display:flex;align-items:center;gap:4px;}
+.mopen{background:rgba(0,230,118,.1);color:var(--green);border:1px solid rgba(0,230,118,.3);}
+.mclosed{background:rgba(255,61,87,.08);color:var(--red);border:1px solid rgba(255,61,87,.2);}
+.dot{width:5px;height:5px;border-radius:50%;background:currentColor;animation:blink 1.5s infinite;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+.clk{font-family:'Share Tech Mono';font-size:.65rem;color:var(--text2);}
+/* ── CONTENT AREA ── */
+.content{flex:1;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
+.content::-webkit-scrollbar{width:3px;}
+.content::-webkit-scrollbar-thumb{background:var(--border);}
+/* ── BOTTOM NAV ── */
+.bnav{background:var(--panel);border-top:1px solid var(--border);display:flex;flex-shrink:0;z-index:50;}
+.btab{flex:1;padding:8px 4px 6px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;border:none;background:transparent;color:var(--text3);font-family:'Share Tech Mono';font-size:.38rem;letter-spacing:.05em;transition:color .2s;}
+.btab.on{color:var(--gold);}
+.btab-icon{font-size:1rem;line-height:1;}
+/* ── SCREENS ── */
+.screen{display:none;padding-bottom:4px;}
+.screen.on{display:block;}
+/* ── CARDS ── */
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px;margin:8px 12px 0;}
+.card-title{font-family:'Share Tech Mono';font-size:.48rem;letter-spacing:.12em;color:var(--gold);margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;}
+.card-title-right{font-size:.4rem;color:var(--text3);}
+/* ── MARKET REGIME BAR ── */
+.regime-bar{margin:8px 12px 0;padding:8px 14px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;}
+.rb-bull{background:rgba(0,230,118,.07);border:1px solid rgba(0,230,118,.2);color:var(--green);}
+.rb-bear{background:rgba(255,61,87,.07);border:1px solid rgba(255,61,87,.2);color:var(--red);}
+.rb-side{background:rgba(255,171,0,.07);border:1px solid rgba(255,171,0,.2);color:var(--amber);}
+.rb-na{background:var(--card);border:1px solid var(--border);color:var(--text3);}
+.rb-main{font-family:'Share Tech Mono';font-size:.6rem;font-weight:bold;letter-spacing:.1em;}
+.rb-sub{font-family:'Share Tech Mono';font-size:.4rem;margin-top:2px;opacity:.7;}
+.rb-right{text-align:right;font-family:'Share Tech Mono';font-size:.4rem;color:var(--text3);}
+/* ── PHASE BAR ── */
+.phase-bar{margin:6px 12px 0;padding:7px 12px;border-radius:6px;background:var(--card);border:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;}
+.pb-label{font-family:'Share Tech Mono';font-size:.5rem;font-weight:bold;}
+.pb-desc{font-family:'Share Tech Mono';font-size:.4rem;color:var(--text2);}
+/* ── INDICES GRID ── */
+.idx-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 12px 0;}
+.icard{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:9px 11px;}
+.iname{font-family:'Share Tech Mono';font-size:.4rem;color:var(--text2);letter-spacing:.08em;margin-bottom:3px;}
+.ival{font-family:'Bebas Neue';font-size:1.05rem;}
+.ichg{font-family:'Share Tech Mono';font-size:.45rem;margin-top:1px;}
+.up{color:var(--green);}.dn{color:var(--red);}.na{color:var(--text3);}
+/* ── SECTOR GRID ── */
+.sec-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:8px;}
+.sec-item{background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:5px;padding:6px 9px;display:flex;justify-content:space-between;align-items:center;}
+.sname{font-family:'Share Tech Mono';font-size:.4rem;color:var(--text2);}
+.schg{font-family:'Share Tech Mono';font-size:.45rem;font-weight:bold;}
+/* ── TOP OPPS ── */
+.opp-list{display:flex;flex-direction:column;gap:5px;margin-top:8px;}
+.opp-item{background:rgba(255,255,255,.02);border-radius:6px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;border:1px solid var(--border);}
+.oi-left .oi-sym{font-family:'Share Tech Mono';font-size:.55rem;color:var(--text);}
+.oi-left .oi-sec{font-size:.4rem;color:var(--text3);margin-top:2px;}
+.oi-mid{text-align:center;}
+.oi-price{font-family:'Bebas Neue';font-size:.9rem;}
+.oi-vol{font-family:'Share Tech Mono';font-size:.38rem;color:var(--text2);}
+.oi-right{text-align:right;}
+.oi-chg{font-family:'Share Tech Mono';font-size:.5rem;font-weight:bold;}
+.sig-badge{display:inline-block;padding:2px 6px;border-radius:3px;font-family:'Share Tech Mono';font-size:.38rem;margin-top:3px;}
+.sb-buy{background:rgba(0,230,118,.15);color:var(--green);border:1px solid rgba(0,230,118,.3);}
+.sb-sell{background:rgba(255,61,87,.15);color:var(--red);border:1px solid rgba(255,61,87,.3);}
+.sb-pre{background:rgba(170,0,255,.15);color:var(--purple);border:1px solid rgba(170,0,255,.3);}
+.sb-watch{background:rgba(255,171,0,.15);color:var(--amber);border:1px solid rgba(255,171,0,.3);}
+.sb-vol{background:rgba(41,121,255,.15);color:var(--blue);border:1px solid rgba(41,121,255,.3);}
+.conf-bar{height:3px;border-radius:2px;background:var(--border);margin-top:4px;overflow:hidden;}
+.conf-fill{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--gold2),var(--gold));}
+.sms{font-family:'Share Tech Mono';font-size:.35rem;color:var(--amber);margin-top:2px;}
+/* ── SCANNER ── */
+.scan-status-bar{display:flex;gap:8px;align-items:center;margin:8px 12px 0;}
+.scan-info{flex:1;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-family:'Share Tech Mono';font-size:.42rem;color:var(--text2);}
+.scan-info span{color:var(--gold);}
+.btn-scan{padding:9px 14px;border:1px solid var(--gold2);background:var(--card);color:var(--gold);font-family:'Share Tech Mono';font-size:.5rem;border-radius:6px;cursor:pointer;white-space:nowrap;}
+.btn-scan:disabled{opacity:.4;}
+.filters{display:flex;gap:5px;overflow-x:auto;padding:8px 12px 0;scrollbar-width:none;}
+.filters::-webkit-scrollbar{display:none;}
+.fbtn{flex-shrink:0;padding:4px 10px;background:var(--card);border:1px solid var(--border);color:var(--text3);font-family:'Share Tech Mono';font-size:.4rem;border-radius:20px;cursor:pointer;}
+.fbtn.on{background:rgba(240,180,41,.1);border-color:var(--gold);color:var(--gold);}
+.sum-row{display:flex;gap:5px;margin:6px 12px 0;}
+.sum-item{flex:1;background:var(--card);border:1px solid var(--border);border-radius:5px;padding:6px;text-align:center;}
+.sum-val{font-family:'Bebas Neue';font-size:.9rem;}
+.sum-lbl{font-family:'Share Tech Mono';font-size:.35rem;color:var(--text3);margin-top:1px;}
+.stock-list{padding:0 12px 10px;}
+.sc{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:9px 11px;margin-top:5px;display:flex;justify-content:space-between;align-items:center;}
+.sc.buy{border-left:3px solid var(--green);}
+.sc.sell{border-left:3px solid var(--red);}
+.sc.pre{border-left:3px solid var(--purple);}
+.sc.vol{border-left:3px solid var(--blue);}
+.sc.watch{border-left:3px solid var(--amber);}
+.sc-sym{font-family:'Share Tech Mono';font-size:.55rem;}
+.sc-sec{font-size:.38rem;color:var(--text3);margin-top:1px;}
+.sc-price{font-family:'Bebas Neue';font-size:.9rem;}
+.sc-vol{font-family:'Share Tech Mono';font-size:.38rem;color:var(--text2);margin-top:1px;}
+.sc-chg{font-family:'Share Tech Mono';font-size:.48rem;font-weight:bold;}
+/* ── LOGIN CARD ── */
+.btn-login{width:100%;padding:12px;border:none;background:linear-gradient(135deg,var(--gold2),var(--gold));color:#000;font-family:'Share Tech Mono';font-size:.58rem;letter-spacing:.1em;border-radius:6px;cursor:pointer;font-weight:bold;}
+.msg{font-family:'Share Tech Mono';font-size:.45rem;margin-top:7px;padding:6px 10px;border-radius:4px;}
+.msg-ok{background:rgba(0,230,118,.08);color:var(--green);border:1px solid rgba(0,230,118,.2);}
+.msg-err{background:rgba(255,61,87,.08);color:var(--red);border:1px solid rgba(255,61,87,.2);}
+.msg-info{background:rgba(240,180,41,.08);color:var(--amber);border:1px solid rgba(240,180,41,.2);}
+/* ── MOMENTUM RADAR ── */
+.momentum-list{display:flex;flex-direction:column;gap:4px;margin-top:8px;}
+/* ── SIMULATION ── */
+.sim-stats{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;}
+.stat-box{background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:6px;padding:8px 10px;}
+.stat-val{font-family:'Bebas Neue';font-size:1.1rem;}
+.stat-lbl{font-family:'Share Tech Mono';font-size:.38rem;color:var(--text3);margin-top:2px;}
+.btn-row{display:flex;gap:6px;margin-top:8px;}
+.btn-sm{flex:1;padding:8px;border-radius:5px;font-family:'Share Tech Mono';font-size:.45rem;cursor:pointer;border:1px solid var(--border);background:var(--card);color:var(--text2);}
+.btn-sm.primary{border-color:var(--gold);color:var(--gold);}
+.btn-sm.danger{border-color:var(--red);color:var(--red);}
+.trade-table{width:100%;margin-top:8px;border-collapse:collapse;}
+.trade-table th,.trade-table td{font-family:'Share Tech Mono';font-size:.38rem;padding:5px 6px;text-align:left;border-bottom:1px solid var(--border);}
+.trade-table th{color:var(--text3);font-size:.35rem;}
+/* ── JOURNAL FORM ── */
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;}
+.finput{background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:5px;padding:7px 9px;color:var(--text);font-family:'Share Tech Mono';font-size:.45rem;width:100%;}
+.finput::placeholder{color:var(--text3);}
+.finput:focus{outline:none;border-color:var(--gold2);}
+.fnotes{grid-column:1/-1;}
+/* ── MORNING PLAN ── */
+.plan-bias{text-align:center;padding:16px;border-radius:8px;margin-top:8px;}
+.plan-bias-bull{background:rgba(0,230,118,.07);border:1px solid rgba(0,230,118,.2);}
+.plan-bias-bear{background:rgba(255,61,87,.07);border:1px solid rgba(255,61,87,.2);}
+.plan-bias-neu{background:rgba(255,171,0,.07);border:1px solid rgba(255,171,0,.2);}
+.plan-bias-val{font-family:'Bebas Neue';font-size:1.8rem;letter-spacing:.1em;}
+.plan-section{margin-top:8px;}
+.plan-label{font-family:'Share Tech Mono';font-size:.42rem;color:var(--text3);margin-bottom:4px;letter-spacing:.1em;}
+.plan-chips{display:flex;flex-wrap:wrap;gap:4px;}
+.plan-chip{padding:3px 9px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:20px;font-family:'Share Tech Mono';font-size:.42rem;color:var(--text2);}
+/* ── SETTINGS ── */
+.setting-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);}
+.setting-label{font-family:'Share Tech Mono';font-size:.48rem;color:var(--text);}
+.setting-sub{font-size:.4rem;color:var(--text3);margin-top:2px;}
+.setting-input{background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:5px;padding:5px 8px;color:var(--text);font-family:'Share Tech Mono';font-size:.45rem;width:100px;text-align:right;}
+/* ── WATCHLIST ── */
+.wl-input-row{display:flex;gap:6px;margin-top:8px;}
+.wl-add-btn{padding:7px 12px;background:var(--gold3);border:1px solid var(--gold2);color:var(--gold);font-family:'Share Tech Mono';font-size:.45rem;border-radius:5px;cursor:pointer;}
+/* ── RECONNECT ── */
+.reconnect{display:none;background:rgba(255,171,0,.08);border:1px solid rgba(255,171,0,.2);margin:6px 12px 0;padding:7px 12px;border-radius:6px;font-family:'Share Tech Mono';font-size:.45rem;color:var(--amber);text-align:center;}
+.reconnect.show{display:block;}
+/* ── EMPTY ── */
+.empty{text-align:center;padding:30px 20px;color:var(--text3);font-family:'Share Tech Mono';font-size:.48rem;line-height:2.2;}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="hdr">
+  <div>
+    <div class="logo">NSE PRO</div>
+    <div class="sub">V5 · INTELLIGENCE PLATFORM</div>
+  </div>
+  <div class="hright">
+    <div class="badge mclosed" id="mktBadge"><div class="dot"></div><span id="mktTxt">CLOSED</span></div>
+    <div class="clk" id="clk">00:00:00</div>
+  </div>
+</div>
+
+<!-- RECONNECT BANNER -->
+<div class="reconnect" id="reconnBanner">⟳ Reconnecting... Auto-retry in 5s</div>
+
+<!-- CONTENT -->
+<div class="content" id="mainContent">
+
+  <!-- ══════════════ DASHBOARD ══════════════ -->
+  <div class="screen on" id="screen-dashboard">
+    <!-- Login -->
+    <div class="card">
+      <div class="card-title">⚡ ZERODHA CONNECTION</div>
+      <button class="btn-login" id="btnLogin" onclick="doLogin()">🔑 LOGIN WITH ZERODHA — TAP EVERY MORNING</button>
+      <div class="msg msg-info" id="msg">Not connected — tap login before 9:15 AM</div>
+    </div>
+    <!-- Market Regime -->
+    <div class="regime-bar rb-na" id="regimeBar">
+      <div>
+        <div class="rb-main" id="regimeTxt">MARKET: LOADING</div>
+        <div class="rb-sub" id="advDecTxt">Advance / Decline: —</div>
+      </div>
+      <div class="rb-right" id="lastScanTxt">Last scan: —</div>
+    </div>
+    <!-- Phase Bar -->
+    <div class="phase-bar">
+      <div>
+        <div class="pb-label" id="phaseLbl" style="color:var(--text3)">🔒 MARKET CLOSED</div>
+        <div class="pb-desc" id="phaseDesc">Pre-market analysis mode</div>
+      </div>
+      <div style="font-family:'Share Tech Mono';font-size:.4rem;color:var(--text3)" id="scanCntTxt">Scans: 0</div>
+    </div>
+    <!-- Indices -->
+    <div class="idx-grid">
+      <div class="icard"><div class="iname">NIFTY 50</div><div class="ival na" id="i0">—</div><div class="ichg na" id="ic0">—</div></div>
+      <div class="icard"><div class="iname">BANK NIFTY</div><div class="ival na" id="i1">—</div><div class="ichg na" id="ic1">—</div></div>
+      <div class="icard"><div class="iname">NIFTY IT</div><div class="ival na" id="i2">—</div><div class="ichg na" id="ic2">—</div></div>
+      <div class="icard"><div class="iname">NIFTY AUTO</div><div class="ival na" id="i3">—</div><div class="ichg na" id="ic3">—</div></div>
+    </div>
+    <!-- Sectors -->
+    <div class="card">
+      <div class="card-title">📊 SECTOR STRENGTH <span class="card-title-right" id="secTime">—</span></div>
+      <div class="sec-grid">
+        <div class="sec-item"><span class="sname">BANKING</span><span class="schg na" id="s0">—</span></div>
+        <div class="sec-item"><span class="sname">IT</span><span class="schg na" id="s1">—</span></div>
+        <div class="sec-item"><span class="sname">AUTO</span><span class="schg na" id="s2">—</span></div>
+        <div class="sec-item"><span class="sname">METALS</span><span class="schg na" id="s3">—</span></div>
+        <div class="sec-item"><span class="sname">ENERGY</span><span class="schg na" id="s4">—</span></div>
+        <div class="sec-item"><span class="sname">PHARMA</span><span class="schg na" id="s5">—</span></div>
+      </div>
+    </div>
+    <!-- Top Opportunities -->
+    <div class="card">
+      <div class="card-title">🎯 TOP OPPORTUNITIES</div>
+      <div class="opp-list" id="topOpps"><div class="empty">Run scanner to see opportunities</div></div>
+    </div>
+    <!-- Momentum Radar -->
+    <div class="card" style="margin-bottom:8px">
+      <div class="card-title">⚡ MOMENTUM RADAR</div>
+      <div class="momentum-list" id="momentumList"><div class="empty">Scanner not started</div></div>
+    </div>
+  </div>
+
+  <!-- ══════════════ SCANNER ══════════════ -->
+  <div class="screen" id="screen-scanner">
+    <div class="scan-status-bar">
+      <div class="scan-info">AUTO: <span id="scanCountdown">OFF</span> &nbsp;|&nbsp; Scans: <span id="scanCount">0</span></div>
+      <button class="btn-scan" id="btnScan" onclick="Scanner.manualScan()" disabled>▶ NOW</button>
+    </div>
+    <div class="filters">
+      <button class="fbtn on" onclick="setFilter('ALL',this)">ALL</button>
+      <button class="fbtn" onclick="setFilter('BUY',this)">🟢 BUY</button>
+      <button class="fbtn" onclick="setFilter('SELL',this)">🔴 SELL</button>
+      <button class="fbtn" onclick="setFilter('PRE',this)">⚡ PRE-BRK</button>
+      <button class="fbtn" onclick="setFilter('VOL',this)">🔥 VOL SPIKE</button>
+      <button class="fbtn" onclick="setFilter('CONF',this)">💎 HIGH CONF</button>
+    </div>
+    <div class="sum-row" id="sumRow" style="display:none">
+      <div class="sum-item"><div class="sum-val up" id="nBuy">0</div><div class="sum-lbl">BUY</div></div>
+      <div class="sum-item"><div class="sum-val dn" id="nSell">0</div><div class="sum-lbl">SELL</div></div>
+      <div class="sum-item"><div class="sum-val" style="color:var(--purple)" id="nPre">0</div><div class="sum-lbl">PRE</div></div>
+      <div class="sum-item"><div class="sum-val" style="color:var(--blue)" id="nVol">0</div><div class="sum-lbl">VOL</div></div>
+      <div class="sum-item"><div class="sum-val" style="color:var(--amber)" id="nWatch">0</div><div class="sum-lbl">WATCH</div></div>
+    </div>
+    <div class="stock-list" id="stockList"><div class="empty">Connect Zerodha → Scanner starts automatically</div></div>
+  </div>
+
+  <!-- ══════════════ OPPORTUNITIES ══════════════ -->
+  <div class="screen" id="screen-opps">
+    <div class="card">
+      <div class="card-title">💎 HIGH CONFIDENCE TRADES</div>
+      <div id="highConfList"><div class="empty">Scanner running... Opportunities will appear here</div></div>
+    </div>
+    <div class="card" style="margin-bottom:8px">
+      <div class="card-title">📈 PRE-BREAKOUT WATCH</div>
+      <div id="preBreakoutList"><div class="empty">No pre-breakout stocks detected</div></div>
+    </div>
+  </div>
+
+  <!-- ══════════════ MARKET ══════════════ -->
+  <div class="screen" id="screen-market">
+    <!-- Morning Plan -->
+    <div class="card" id="morningPlanCard">
+      <div class="card-title">🌅 MORNING AI PLAN <span class="card-title-right" id="planTime">—</span></div>
+      <div id="morningPlanContent"><div class="empty">Plan generates automatically before market open</div></div>
+    </div>
+    <!-- Trade Review -->
+    <div class="card" id="tradeReviewCard">
+      <div class="card-title">📋 TRADE REVIEW</div>
+      <div id="tradeReviewContent"><div class="empty">Trade review available after market hours</div></div>
+    </div>
+    <!-- Risk Calculator -->
+    <div class="card" style="margin-bottom:8px">
+      <div class="card-title">🛡 RISK CALCULATOR</div>
+      <div style="margin-top:8px">
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <input class="finput" id="riskEntry" type="number" placeholder="Entry Price">
+          <input class="finput" id="riskCapital" type="number" placeholder="Capital">
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <input class="finput" id="riskPct" type="number" placeholder="Risk %" value="1">
+          <button class="btn-sm primary" onclick="calcRisk()" style="flex:1">CALCULATE</button>
+        </div>
+        <div id="riskResult" style="font-family:'Share Tech Mono';font-size:.45rem;color:var(--text2);line-height:1.8"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ WATCHLIST ══════════════ -->
+  <div class="screen" id="screen-watchlist">
+    <div class="card">
+      <div class="card-title">👁 MY WATCHLIST</div>
+      <div class="wl-input-row">
+        <input class="finput" id="wlInput" placeholder="Add symbol e.g. RELIANCE" style="flex:1" onkeydown="if(event.key==='Enter')addToWatchlist()">
+        <button class="wl-add-btn" onclick="addToWatchlist()">+ ADD</button>
+      </div>
+      <div id="watchlistContent" style="margin-top:8px"><div class="empty">Add stocks to track them here</div></div>
+    </div>
+    <!-- Simulation Quick View -->
+    <div class="card">
+      <div class="card-title">🧪 SIMULATION LAB <span class="card-title-right" onclick="goTab('sim')" style="cursor:pointer;color:var(--gold)">VIEW ALL →</span></div>
+      <div class="sim-stats" id="simQuickStats">
+        <div class="stat-box"><div class="stat-val" id="sqCapital">₹1Cr</div><div class="stat-lbl">PORTFOLIO</div></div>
+        <div class="stat-box"><div class="stat-val" id="sqPnl">₹0</div><div class="stat-lbl">TOTAL P&L</div></div>
+        <div class="stat-box"><div class="stat-val" id="sqTrades">0</div><div class="stat-lbl">TRADES</div></div>
+        <div class="stat-box"><div class="stat-val" id="sqWinRate">0%</div><div class="stat-lbl">WIN RATE</div></div>
+      </div>
+    </div>
+    <!-- Journal Quick Add -->
+    <div class="card" style="margin-bottom:8px">
+      <div class="card-title">📓 QUICK JOURNAL ENTRY</div>
+      <div class="form-grid" style="margin-top:8px">
+        <input class="finput" id="jDate" type="date">
+        <input class="finput" id="jSym" placeholder="Symbol">
+        <input class="finput" id="jBuy" type="number" placeholder="Buy Price">
+        <input class="finput" id="jSell" type="number" placeholder="Sell Price">
+        <input class="finput" id="jQty" type="number" placeholder="Qty">
+        <input class="finput" id="jNotes" placeholder="Notes">
+      </div>
+      <div class="btn-row">
+        <button class="btn-sm primary" onclick="addJournalTrade()">+ ADD TRADE</button>
+        <button class="btn-sm" onclick="Journal.exportCSV()">📥 EXPORT CSV</button>
+      </div>
+      <div id="journalMsg" style="font-family:'Share Tech Mono';font-size:.42rem;color:var(--green);margin-top:6px;display:none"></div>
+    </div>
+  </div>
+
+</div><!-- end content -->
+
+<!-- BOTTOM NAV -->
+<div class="bnav">
+  <button class="btab on" id="tab-dashboard" onclick="goTab('dashboard')"><div class="btab-icon">📊</div>DASHBOARD</button>
+  <button class="btab" id="tab-scanner" onclick="goTab('scanner')"><div class="btab-icon">🔍</div>SCANNER</button>
+  <button class="btab" id="tab-opps" onclick="goTab('opps')"><div class="btab-icon">🎯</div>OPPS</button>
+  <button class="btab" id="tab-market" onclick="goTab('market')"><div class="btab-icon">🌐</div>MARKET</button>
+  <button class="btab" id="tab-watchlist" onclick="goTab('watchlist')"><div class="btab-icon">⭐</div>WATCH</button>
+</div>
+
+<script>
+// ═══════════════════════ CORE CONFIG ═══════════════════════
+var AK  = '8b3clv6hwxt6s0r2';
+var WK  = 'https://raspy-cherry-dfee.manojbl6789.workers.dev';
+var ME  = 'https://manojbl007.github.io/nse-pro/nse-pro-v5.html';
+var tok = null, allStocks = [], filt = 'ALL', watchlist = [];
+var prevSignals = {};
+var IX_NAMES = ['NSE:NIFTY 50','NSE:NIFTY BANK','NSE:NIFTY IT','NSE:NIFTY AUTO'];
+
+// ═══════════════════════ CLOCK ═══════════════════════
+function pad(x){ return x<10?'0'+x:''+x; }
+function tick(){
+  var n=new Date(),h=n.getHours(),m=n.getMinutes(),s=n.getSeconds();
+  document.getElementById('clk').textContent=pad(h)+':'+pad(m)+':'+pad(s);
+  var op=(h>9||(h==9&&m>=15))&&(h<15||(h==15&&m<=30));
+  document.getElementById('mktBadge').className='badge '+(op?'mopen':'mclosed');
+  document.getElementById('mktTxt').textContent=op?'OPEN':'CLOSED';
+  // Update phase bar every minute
+  if(s===0) updatePhaseBar();
+}
+setInterval(tick,1000); tick();
+
+function updatePhaseBar(){
+  var pl = AnalysisEngine.getPhaseLabel();
+  document.getElementById('phaseLbl').textContent = pl.label;
+  document.getElementById('phaseLbl').style.color = pl.color;
+  document.getElementById('phaseDesc').textContent = pl.desc;
+}
+updatePhaseBar();
+
+// ═══════════════════════ NAVIGATION ═══════════════════════
+var TABS = ['dashboard','scanner','opps','market','watchlist'];
+function goTab(t){
+  TABS.forEach(function(id){
+    document.getElementById('screen-'+id).classList.toggle('on', id===t);
+    document.getElementById('tab-'+id).classList.toggle('on', id===t);
+  });
+  document.getElementById('mainContent').scrollTop = 0;
+  if(t==='watchlist') updateSimQuick();
+  if(t==='market') generateMorningPlan();
+}
+
+// ═══════════════════════ LOGIN ═══════════════════════
+function setMsg(t,c){
+  var e=document.getElementById('msg');
+  e.textContent=t;
+  e.className='msg '+(c==='ok'?'msg-ok':c==='err'?'msg-err':'msg-info');
+}
+function doLogin(){ window.location.href='https://kite.trade/connect/login?api_key='+AK+'&v=3'; }
+
+function connected(t){
+  tok=t;
+  try{ localStorage.setItem('tok_'+new Date().toDateString(),t); }catch(e){}
+  setMsg('✓ LIVE — Auto-scan every 20s. Token valid until midnight','ok');
+  document.getElementById('btnLogin').textContent='✓ CONNECTED — Tap to re-login';
+  document.getElementById('btnScan').disabled=false;
+  AlertSystem.requestPermission();
+  Scanner.setToken(t);
+  Scanner.setCallback(onScanComplete);
+  Scanner.start();
+  loadIndices();
+}
+
+function checkSaved(){
+  try{
+    var t=localStorage.getItem('tok_'+new Date().toDateString());
+    if(t){ connected(t); return true; }
+  }catch(e){}
+  return false;
+}
+
+// ═══════════════════════ AUTO DETECT ═══════════════════════
+window.addEventListener('load',function(){
+  var p=new URLSearchParams(window.location.search);
+  var at=p.get('access_token'),rt=p.get('request_token'),st=p.get('status'),er=p.get('auth_error');
+  history.replaceState({},'',location.pathname);
+  if(at){ setMsg('● Token received…','info'); connected(at); }
+  else if(er){ setMsg('✗ '+decodeURIComponent(er),'err'); checkSaved(); }
+  else if(rt&&st==='success'){
+    setMsg('● Exchanging token…','info');
+    window.location.href=WK+'?action=login&api_key='+AK+'&request_token='+encodeURIComponent(rt)+'&redirect='+encodeURIComponent(ME);
+  } else { checkSaved(); }
+  loadWatchlist();
+  // Set today's date in journal
+  try{ document.getElementById('jDate').value = new Date().toISOString().split('T')[0]; }catch(e){}
+});
+
+// ═══════════════════════ LOAD INDICES ═══════════════════════
+function loadIndices(){
+  if(!tok) return;
+  fetch(WK+'?action=quote&api_key='+AK+'&access_token='+encodeURIComponent(tok)+'&symbols='+encodeURIComponent(IX_NAMES.join(',')))
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if(d.status!=='success') return;
+    IX_NAMES.forEach(function(sym,i){
+      var q=d.data[sym]; if(!q) return;
+      var c=((q.last_price-q.ohlc.close)/q.ohlc.close*100).toFixed(2);
+      var cl=parseFloat(c)>=0?'up':'dn';
+      document.getElementById('i'+i).textContent=q.last_price.toLocaleString('en-IN');
+      document.getElementById('i'+i).className='ival '+cl;
+      document.getElementById('ic'+i).textContent=(parseFloat(c)>=0?'+':'')+c+'%';
+      document.getElementById('ic'+i).className='ichg '+cl;
+    });
+  }).catch(function(){});
+}
+
+// ═══════════════════════ SCAN CALLBACK ═══════════════════════
+function onScanComplete(stocks, count){
+  allStocks = stocks;
+  document.getElementById('scanCount').textContent = count;
+  document.getElementById('scanCntTxt').textContent = 'Scans: '+count;
+  document.getElementById('reconnBanner').classList.remove('show');
+  var now = new Date();
+  document.getElementById('lastScanTxt').textContent = 'Last: '+pad(now.getHours())+':'+pad(now.getMinutes());
+  document.getElementById('secTime').textContent = pad(now.getHours())+':'+pad(now.getMinutes());
+  document.getElementById('btnScan').disabled = false;
+  // Check signals for alerts
+  checkSignalAlerts(stocks);
+  // Update UI
+  updateRegime(stocks);
+  updateSectors(stocks);
+  updateSummary(stocks);
+  renderStocks();
+  updateTopOpps(stocks);
+  updateMomentumRadar(stocks);
+  updateOppsScreen(stocks);
+  loadIndices();
+  // Market summary every 10 scans
+  if(count%10===0){
+    var n=document.getElementById('i0').textContent;
+    var nc=document.getElementById('ic0').textContent;
+    var adv=stocks.filter(function(s){return s.chg>0;}).length;
+    var dec=stocks.filter(function(s){return s.chg<0;}).length;
+    var reg=AnalysisEngine.getRegime(stocks);
+    AlertSystem.marketSummary(reg,n,nc,adv,dec,
+      stocks.filter(function(s){return s.sig==='BUY';}).length,
+      stocks.filter(function(s){return s.sig==='SELL';}).length);
+  }
+  // Auto simulation
+  stocks.forEach(function(s){
+    var pos=SimEngine.getPositions()[s.sym];
+    if(pos) SimEngine.updatePosition(s.sym,s.price);
+    else if((s.sig==='BUY'||s.sig==='SELL')&&s.conf>=6) SimEngine.openPosition(s.sym,s.price,s.sig);
+  });
+  updateSimQuick();
+}
+
+// ═══════════════════════ SIGNAL ALERTS ═══════════════════════
+function checkSignalAlerts(stocks){
+  stocks.forEach(function(s){
+    var prev=prevSignals[s.sym];
+    if(prev!==s.sig){
+      if(s.sig==='BUY'||s.sig==='SELL'||s.sig==='PRE'||s.sig==='VOLUME_SPIKE'){
+        AlertSystem.signal(s.sym,s.price,s.chg,s.volX,s.sig);
+      }
+      prevSignals[s.sym]=s.sig;
+    }
+  });
+}
+
+// ═══════════════════════ REGIME ═══════════════════════
+function updateRegime(stocks){
+  var regime=AnalysisEngine.getRegime(stocks);
+  var adv=stocks.filter(function(s){return s.chg>0;}).length;
+  var dec=stocks.filter(function(s){return s.chg<0;}).length;
+  var bar=document.getElementById('regimeBar');
+  var cls=regime==='TRENDING_UP'?'rb-bull':regime==='TRENDING_DOWN'?'rb-bear':regime==='VOLATILE'?'rb-bear':'rb-side';
+  bar.className='regime-bar '+cls;
+  var label=regime==='TRENDING_UP'?'🟢 MARKET: BULLISH':regime==='TRENDING_DOWN'?'🔴 MARKET: BEARISH':regime==='VOLATILE'?'⚡ MARKET: VOLATILE':'🟡 MARKET: SIDEWAYS';
+  document.getElementById('regimeTxt').textContent=label;
+  document.getElementById('advDecTxt').textContent='Advance: '+adv+' | Decline: '+dec+' | Ratio: '+(adv/(adv+dec||1)*100).toFixed(0)+'%';
+}
+
+// ═══════════════════════ SECTORS ═══════════════════════
+var SECTORS=['BANKING','IT','AUTO','METALS','ENERGY','PHARMA'];
+function updateSectors(stocks){
+  SECTORS.forEach(function(sec,i){
+    var ss=stocks.filter(function(s){return s.sec===sec;});
+    if(!ss.length) return;
+    var avg=ss.reduce(function(a,s){return a+s.chg;},0)/ss.length;
+    var el=document.getElementById('s'+i);
+    el.textContent=(avg>=0?'+':'')+avg.toFixed(2)+'%';
+    el.className='schg '+(avg>=0?'up':'dn');
+  });
+}
+
+// ═══════════════════════ SUMMARY ═══════════════════════
+function updateSummary(stocks){
+  document.getElementById('nBuy').textContent=stocks.filter(function(s){return s.sig==='BUY';}).length;
+  document.getElementById('nSell').textContent=stocks.filter(function(s){return s.sig==='SELL';}).length;
+  document.getElementById('nPre').textContent=stocks.filter(function(s){return s.sig==='PRE';}).length;
+  document.getElementById('nVol').textContent=stocks.filter(function(s){return s.vs;}).length;
+  document.getElementById('nWatch').textContent=stocks.filter(function(s){return s.sig==='WATCH';}).length;
+  document.getElementById('sumRow').style.display='flex';
+}
+
+// ═══════════════════════ RENDER STOCKS ═══════════════════════
+var currentFilter='ALL';
+function setFilter(f,btn){
+  currentFilter=f;
+  document.querySelectorAll('.fbtn').forEach(function(b){b.classList.remove('on');});
+  btn.classList.add('on');
+  if(allStocks.length) renderStocks();
+}
+
+function renderStocks(){
+  var list=allStocks;
+  if(currentFilter==='BUY') list=allStocks.filter(function(s){return s.sig==='BUY';});
+  if(currentFilter==='SELL') list=allStocks.filter(function(s){return s.sig==='SELL';});
+  if(currentFilter==='PRE') list=allStocks.filter(function(s){return s.sig==='PRE';});
+  if(currentFilter==='VOL') list=allStocks.filter(function(s){return s.vs;});
+  if(currentFilter==='CONF') list=allStocks.filter(function(s){return s.conf>=7;}).sort(function(a,b){return b.conf-a.conf;});
+  var el=document.getElementById('stockList');
+  if(!list.length){el.innerHTML='<div class="empty">No stocks match this filter</div>';return;}
+  el.innerHTML=list.map(function(s){
+    var cls=s.chg>=0?'up':'dn';
+    var cc=s.sig==='BUY'?'buy':s.sig==='SELL'?'sell':s.sig==='PRE'?'pre':s.vs?'vol':'watch';
+    var sb=s.sig==='BUY'?'sb-buy':s.sig==='SELL'?'sb-sell':s.sig==='PRE'?'sb-pre':s.vs?'sb-vol':'sb-watch';
+    var ch=(s.chg>=0?'+':'')+s.chg.toFixed(2)+'%';
+    var stars='★'.repeat(s.sms)+'☆'.repeat(5-s.sms);
+    return'<div class="sc '+cc+'">'+
+      '<div><div class="sc-sym">'+s.sym+'</div><div class="sc-sec">'+s.sec+'</div><div class="sms">'+stars+'</div></div>'+
+      '<div style="text-align:center"><div class="sc-price">₹'+s.price.toLocaleString('en-IN')+'</div><div class="sc-vol">Vol:'+s.volX.toFixed(1)+'x</div></div>'+
+      '<div style="text-align:right"><div class="sc-chg '+cls+'">'+ch+'</div>'+
+      '<div class="sig-badge '+sb+'">'+s.sig+'</div>'+
+      '<div class="conf-bar" style="width:60px;margin-left:auto"><div class="conf-fill" style="width:'+s.conf*10+'%"></div></div>'+
+      '</div></div>';
+  }).join('');
+}
+
+// ═══════════════════════ TOP OPPS ═══════════════════════
+function updateTopOpps(stocks){
+  var top=stocks.filter(function(s){return s.sig==='BUY'||s.sig==='PRE';}).sort(function(a,b){return b.conf-a.conf;}).slice(0,5);
+  var el=document.getElementById('topOpps');
+  if(!top.length){el.innerHTML='<div class="empty">No high-confidence opportunities</div>';return;}
+  el.innerHTML=top.map(function(s){
+    var cls=s.chg>=0?'up':'dn';
+    var sb=s.sig==='BUY'?'sb-buy':'sb-pre';
+    return'<div class="opp-item">'+
+      '<div class="oi-left"><div class="oi-sym">'+s.sym+'</div><div class="oi-sec">'+s.sec+'</div></div>'+
+      '<div class="oi-mid"><div class="oi-price">₹'+s.price.toLocaleString('en-IN')+'</div><div class="oi-vol">Conf: '+s.conf+'/10</div></div>'+
+      '<div class="oi-right"><div class="oi-chg '+cls+'">'+(s.chg>=0?'+':'')+s.chg.toFixed(2)+'%</div><div class="sig-badge '+sb+'">'+s.sig+'</div></div>'+
+      '</div>';
+  }).join('');
+}
+
+// ═══════════════════════ MOMENTUM RADAR ═══════════════════════
+function updateMomentumRadar(stocks){
+  var top=stocks.filter(function(s){return s.vs||Math.abs(s.chg)>2;}).sort(function(a,b){return b.volX-a.volX;}).slice(0,5);
+  var el=document.getElementById('momentumList');
+  if(!top.length){el.innerHTML='<div class="empty">No momentum stocks detected</div>';return;}
+  el.innerHTML=top.map(function(s){
+    var cls=s.chg>=0?'up':'dn';
+    return'<div class="opp-item">'+
+      '<div><div class="sc-sym">'+s.sym+'</div><div class="sc-sec">'+s.sec+'</div></div>'+
+      '<div style="text-align:center"><div class="sc-price">₹'+s.price.toLocaleString('en-IN')+'</div></div>'+
+      '<div style="text-align:right"><div class="sc-chg '+cls+'">'+(s.chg>=0?'+':'')+s.chg.toFixed(2)+'%</div><div style="font-family:\'Share Tech Mono\';font-size:.38rem;color:var(--blue)">VOL:'+s.volX.toFixed(1)+'x</div></div>'+
+      '</div>';
+  }).join('');
+}
+
+// ═══════════════════════ OPPS SCREEN ═══════════════════════
+function updateOppsScreen(stocks){
+  var hc=stocks.filter(function(s){return s.conf>=7;}).sort(function(a,b){return b.conf-a.conf;}).slice(0,10);
+  var pre=stocks.filter(function(s){return s.sig==='PRE';});
+  var hcEl=document.getElementById('highConfList');
+  var preEl=document.getElementById('preBreakoutList');
+  if(!hc.length) hcEl.innerHTML='<div class="empty">No high confidence trades</div>';
+  else hcEl.innerHTML=hc.map(function(s){
+    var sb=s.sig==='BUY'?'sb-buy':s.sig==='SELL'?'sb-sell':'sb-watch';
+    var cls=s.chg>=0?'up':'dn';
+    return'<div class="opp-item">'+
+      '<div><div class="oi-sym">'+s.sym+'</div><div class="oi-sec">'+s.sec+' | Conf:'+s.conf+'/10</div></div>'+
+      '<div style="text-align:center"><div class="oi-price">₹'+s.price.toLocaleString('en-IN')+'</div><div class="oi-vol">Vol:'+s.volX.toFixed(1)+'x</div></div>'+
+      '<div style="text-align:right"><div class="oi-chg '+cls+'">'+(s.chg>=0?'+':'')+s.chg.toFixed(2)+'%</div><div class="sig-badge '+sb+'">'+s.sig+'</div></div>'+
+      '</div>';
+  }).join('');
+  if(!pre.length) preEl.innerHTML='<div class="empty">No pre-breakout stocks</div>';
+  else preEl.innerHTML=pre.map(function(s){
+    return'<div class="opp-item">'+
+      '<div><div class="oi-sym">'+s.sym+'</div><div class="oi-sec">'+s.sec+'</div></div>'+
+      '<div style="text-align:center"><div class="oi-price">₹'+s.price.toLocaleString('en-IN')+'</div><div class="oi-vol">Near High: '+s.highPct.toFixed(0)+'%</div></div>'+
+      '<div style="text-align:right"><div class="oi-chg up">+'+ s.chg.toFixed(2)+'%</div><div class="sig-badge sb-pre">PRE</div></div>'+
+      '</div>';
+  }).join('');
+}
+
+// ═══════════════════════ MORNING PLAN ═══════════════════════
+function generateMorningPlan(){
+  var secs=SECTORS.map(function(s,i){
+    var el=document.getElementById('s'+i);
+    var v=el?parseFloat(el.textContent):0;
+    return{name:s,chg:isNaN(v)?0:v};
+  });
+  var plan=AnalysisEngine.generateMorningPlan(secs,allStocks);
+  document.getElementById('planTime').textContent=plan.generated;
+  var biasClass=plan.bias==='BULLISH'?'plan-bias-bull':plan.bias==='BEARISH'?'plan-bias-bear':'plan-bias-neu';
+  var biasColor=plan.bias==='BULLISH'?'var(--green)':plan.bias==='BEARISH'?'var(--red)':'var(--amber)';
+  var riskColor=plan.riskLevel==='HIGH'?'var(--red)':plan.riskLevel==='MEDIUM'?'var(--amber)':'var(--green)';
+  document.getElementById('morningPlanContent').innerHTML=
+    '<div class="plan-bias '+biasClass+'"><div class="plan-bias-val" style="color:'+biasColor+'">'+plan.bias+'</div><div style="font-family:\'Share Tech Mono\';font-size:.4rem;color:var(--text2);margin-top:4px">Market Bias</div></div>'+
+    '<div class="plan-section"><div class="plan-label">BEST SECTORS TODAY</div><div class="plan-chips">'+plan.bestSectors.map(function(s){return'<div class="plan-chip">'+s+'</div>';}).join('')+'</div></div>'+
+    '<div class="plan-section"><div class="plan-label">TOP WATCHLIST</div><div class="plan-chips">'+plan.topStocks.map(function(s){return'<div class="plan-chip">'+s+'</div>';}).join('')+'</div></div>'+
+    '<div class="plan-section" style="margin-top:8px"><div style="display:flex;gap:6px"><div style="flex:1;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:5px;padding:8px;text-align:center"><div style="font-family:\'Bebas Neue\';font-size:1rem;color:'+riskColor+'">'+plan.riskLevel+'</div><div style="font-family:\'Share Tech Mono\';font-size:.35rem;color:var(--text3)">RISK LEVEL</div></div></div></div>';
+  // Trade Review
+  var stats=Journal.getStats();
+  document.getElementById('tradeReviewContent').innerHTML=
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">'+
+    '<div class="stat-box"><div class="stat-val">'+stats.totalTrades+'</div><div class="stat-lbl">TOTAL TRADES</div></div>'+
+    '<div class="stat-box"><div class="stat-val up">'+stats.wins+'</div><div class="stat-lbl">WINS</div></div>'+
+    '<div class="stat-box"><div class="stat-val dn">'+stats.losses+'</div><div class="stat-lbl">LOSSES</div></div>'+
+    '<div class="stat-box"><div class="stat-val" style="color:var(--gold)">'+stats.winRate+'%</div><div class="stat-lbl">WIN RATE</div></div>'+
+    '</div>'+
+    '<div style="font-family:\'Share Tech Mono\';font-size:.42rem;margin-top:8px;padding:6px;background:rgba(255,255,255,.02);border-radius:5px;color:'+(parseFloat(stats.totalPnl)>=0?'var(--green)':'var(--red)')+'">'+
+    'Total P&L: ₹'+parseFloat(stats.totalPnl).toLocaleString('en-IN')+'</div>';
+}
+
+// ═══════════════════════ RISK CALC ═══════════════════════
+function calcRisk(){
+  var entry=parseFloat(document.getElementById('riskEntry').value)||0;
+  var cap=parseFloat(document.getElementById('riskCapital').value)||100000;
+  var rPct=parseFloat(document.getElementById('riskPct').value)||1;
+  if(!entry){document.getElementById('riskResult').textContent='Enter entry price';return;}
+  var r=AnalysisEngine.calcRisk(cap,rPct,entry);
+  document.getElementById('riskResult').innerHTML=
+    '💰 Capital: ₹'+cap.toLocaleString('en-IN')+'<br>'+
+    '🛑 Stop Loss: ₹'+r.stopLoss+'<br>'+
+    '📦 Quantity: '+r.quantity+' shares<br>'+
+    '⚠️ Max Risk: ₹'+parseFloat(r.maxLoss).toLocaleString('en-IN');
+}
+
+// ═══════════════════════ SIMULATION QUICK ═══════════════════════
+function updateSimQuick(){
+  var s=SimEngine.getStats();
+  document.getElementById('sqCapital').textContent='₹'+(s.capital/100000).toFixed(1)+'L';
+  var pnl=s.totalPnl;
+  document.getElementById('sqPnl').textContent=(pnl>=0?'+':'-')+'₹'+Math.abs(pnl/1000).toFixed(1)+'K';
+  document.getElementById('sqPnl').className='stat-val '+(pnl>=0?'up':'dn');
+  document.getElementById('sqTrades').textContent=s.totalTrades;
+  document.getElementById('sqWinRate').textContent=s.winRate+'%';
+}
+updateSimQuick();
+
+// ═══════════════════════ JOURNAL ═══════════════════════
+function addJournalTrade(){
+  var date=document.getElementById('jDate').value;
+  var sym=document.getElementById('jSym').value;
+  var buy=document.getElementById('jBuy').value;
+  var sell=document.getElementById('jSell').value;
+  var qty=document.getElementById('jQty').value;
+  var notes=document.getElementById('jNotes').value;
+  if(!sym||!buy||!sell||!qty){
+    var m=document.getElementById('journalMsg');
+    m.textContent='Fill all fields!';m.style.color='var(--red)';m.style.display='block';
+    setTimeout(function(){m.style.display='none';},2000);
+    return;
+  }
+  Journal.addTrade(date,sym,buy,sell,qty,notes);
+  var m=document.getElementById('journalMsg');
+  var t=Journal.getTrades().slice(-1)[0];
+  m.textContent='✓ Added: '+sym.toUpperCase()+' P&L: ₹'+t.pnl.toFixed(0);
+  m.style.color=t.pnl>=0?'var(--green)':'var(--red)';
+  m.style.display='block';
+  document.getElementById('jSym').value='';
+  document.getElementById('jBuy').value='';
+  document.getElementById('jSell').value='';
+  document.getElementById('jQty').value='';
+  document.getElementById('jNotes').value='';
+  setTimeout(function(){m.style.display='none';},3000);
+}
+
+// ═══════════════════════ WATCHLIST ═══════════════════════
+function loadWatchlist(){
+  try{ watchlist=JSON.parse(localStorage.getItem('wl_v5')||'[]'); }catch(e){ watchlist=[]; }
+  renderWatchlist();
+}
+function addToWatchlist(){
+  var sym=document.getElementById('wlInput').value.toUpperCase().trim();
+  if(!sym) return;
+  if(watchlist.indexOf(sym)===-1){ watchlist.push(sym); saveWatchlist(); renderWatchlist(); }
+  document.getElementById('wlInput').value='';
+}
+function removeFromWatchlist(sym){
+  watchlist=watchlist.filter(function(s){return s!==sym;});
+  saveWatchlist(); renderWatchlist();
+}
+function saveWatchlist(){
+  try{ localStorage.setItem('wl_v5',JSON.stringify(watchlist)); }catch(e){}
+}
+function renderWatchlist(){
+  var el=document.getElementById('watchlistContent');
+  if(!watchlist.length){el.innerHTML='<div class="empty">No stocks added yet</div>';return;}
+  el.innerHTML=watchlist.map(function(sym){
+    var s=allStocks.find(function(x){return x.sym===sym;});
+    if(!s) return'<div class="opp-item"><div class="oi-sym">'+sym+'</div><div style="font-family:\'Share Tech Mono\';font-size:.4rem;color:var(--text3)">Awaiting scan...</div><button onclick="removeFromWatchlist(\''+sym+'\')" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:.7rem">✕</button></div>';
+    var cls=s.chg>=0?'up':'dn';
+    var sb=s.sig==='BUY'?'sb-buy':s.sig==='SELL'?'sb-sell':'sb-watch';
+    return'<div class="opp-item">'+
+      '<div><div class="oi-sym">'+sym+'</div><div class="oi-sec">'+s.sec+'</div></div>'+
+      '<div style="text-align:center"><div class="oi-price">₹'+s.price.toLocaleString('en-IN')+'</div><div class="oi-vol">Vol:'+s.volX.toFixed(1)+'x</div></div>'+
+      '<div style="text-align:right"><div class="oi-chg '+cls+'">'+(s.chg>=0?'+':'')+s.chg.toFixed(2)+'%</div><div class="sig-badge '+sb+'">'+s.sig+'</div><button onclick="removeFromWatchlist(\''+sym+'\')" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:.7rem;display:block;margin-top:2px">✕</button></div>'+
+      '</div>';
+  }).join('');
+}
+</script>
+</body>
+</html>
