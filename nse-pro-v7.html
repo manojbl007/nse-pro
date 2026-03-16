@@ -2074,7 +2074,7 @@ function processStocks(data) {
     }
     // Sim trades
     if (simPos[s.sym]) updateSimPos(s.sym, s.price);
-    else if ((s.sig === 'BUY' || s.sig === 'SELL' || s.sig === 'ORB_BUY' || s.sig === 'SHORT') && s.wp >= S.minWP && !isDLHit() && Object.keys(simPos).length < S.maxPos) openSimPos(s.sym, s.price, s.sig);
+    else if ((s.sig==='BUY'||s.sig==='SELL'||s.sig==='ORB_BUY'||s.sig==='SHORT'||s.sig==='PRE'||s.sig==='VOLUME_SPIKE') && s.wp>=50 && !isDLHit() && Object.keys(simPos).length<S.maxPos) openSimPos(s.sym, s.price, s.sig==='SELL'||s.sig==='SHORT'?'SELL':'BUY');
   });
 
   // Regime change alert
