@@ -5904,8 +5904,8 @@ V9.ui.pct = function(n){ return (n>=0?'+':'')+n.toFixed(2)+'%'; };
 // NSE PRO V9 BETA — PART 7 END
 // PASTE PART 8 DIRECTLY BELOW THIS LINE
 // ══════════════════════════════════════════════
-   // ═══════════════════════════════════════════
-// NSE PRO V9 — PATCH 1
+  // ═══════════════════════════════════════════
+// NSE PRO V9 — PATCH 1 (Version 3)
 // PRE-BREAKOUT Intelligence System
 //
 // Features:
@@ -5919,6 +5919,7 @@ V9.ui.pct = function(n){ return (n>=0?'+':'')+n.toFixed(2)+'%'; };
 //   PRE-BRK tab UI + cards
 //
 // Paste AFTER Part 7, BEFORE Part 8
+// v3: SMS≥35 | hp≥65 | 2-of-3 conditions | first-scan detection
 // ═══════════════════════════════════════════
 
 // ══════════════════════════════════════════
@@ -6005,7 +6006,8 @@ V9.prbrk.isMoved = function(sym, price, chg) {
 // ══════════════════════════════════════════
 V9.prbrk.isCompressing = function(sym, currentRange) {
   var hist = V9.state.rangeHistory[sym];
-  if(!hist || hist.length < 2) return {compressing:false, strength:0};
+  if(!hist || hist.length < 1) return {compressing:false, strength:0};
+  if(hist.length < 2) return {compressing:false, strength:parseFloat((currentRange>0?(2-currentRange)*25:0).toFixed(1))};
 
   var prev1 = hist[hist.length - 1];
   var prev2 = hist.length >= 2 ? hist[hist.length - 2] : prev1;
@@ -6034,7 +6036,7 @@ V9.prbrk.isCompressing = function(sym, currentRange) {
 // ══════════════════════════════════════════
 V9.prbrk.isVolumeDrying = function(sym, currentVolX) {
   var hist = V9.state.volumeHistory[sym];
-  if(!hist || hist.length < 1) return {drying:false, returning:false, status:'UNKNOWN'};
+  if(!hist || hist.length < 1) return {drying:currentVolX<0.9, returning:false, status:currentVolX<0.9?'DRYING':'NORMAL'};
 
   var avgVol = hist.reduce(function(a,v){return a+v;},0) / hist.length;
 
@@ -6175,13 +6177,17 @@ V9.prbrk.detect = function(stock) {
   // RSI sweet spot (45-65) — not extended
   var rsiOk = s.rsi ? (s.rsi >= 42 && s.rsi <= 68) : true;
 
-  // PRE-BRK qualification
+  // v3: 2-of-3 conditions must be true (quality filter)
+  var condA = compress.compressing;              // A: range compression (coiling)
+  var condB = (s.hp >= 65 && s.volX <= 1.5);    // B: near high, quiet volume
+  var condC = pullback.isPullback;               // C: pullback 40% retrace
+  var condCount = (condA?1:0) + (condB?1:0) + (condC?1:0);
+
   var isPREBRK = (
-    (compress.compressing || pullback.isPullback) &&
-    (volStat.drying || volStat.returning || pullback.isPullback) &&
+    condCount >= 2 &&                            // at least 2 of 3 conditions
+    (volStat.drying || volStat.returning || condC || s.volX <= 1.0) &&
     !moveChk.isMoved &&
-    rsiOk &&
-    s.sms >= 35  // low bar — catch early
+    s.sms >= 35                                  // quality threshold
   );
 
   return {
@@ -6381,6 +6387,12 @@ V9.ui.buildPRBKCard = function(s) {
   var volEmoji = vol.status==='RETURNING' ? '📈' : vol.status==='DRYING' ? '📉' : '📊';
   var movCol   = mv.isMoved ? 'var(--red)' : 'var(--green)';
 
+  // Which conditions met
+  var condA2 = (r.compress && r.compress.compressing);
+  var condB2 = (r.moveChk && s.hp >= 65);
+  var condC2 = (r.pullback && r.pullback.isPullback);
+  var metCount = (condA2?1:0)+(condB2?1:0)+(condC2?1:0);
+
   var h = '';
   h += '<div class="stock-card" style="border-left:3px solid var(--blue);background:rgba(61,142,248,.04);cursor:pointer" onclick="V9.ui.openDetail(\''+s.sym+'\')">';
 
@@ -6392,6 +6404,19 @@ V9.ui.buildPRBKCard = function(s) {
   h += '</div>';
   h += '<div class="sc-sec">'+s.sec+'</div>';
   h += '<div class="sc-tags" style="margin-top:4px">';
+  // v3: condition badges showing which of 3 conditions are met
+  var _ca = r.compress && r.compress.compressing;
+  var _cb = s.hp >= 65;
+  var _cc = r.pullback && r.pullback.isPullback;
+  var _mc = (_ca?1:0)+(_cb?1:0)+(_cc?1:0);
+  var _mk = function(lbl,ok){ return '<span style="font-family:\'JetBrains Mono\';font-size:.24rem;padding:1px 5px;border-radius:3px;background:'+(ok?'rgba(0,217,126,.1)':'rgba(255,255,255,.03)')+';color:'+(ok?'var(--green)':'var(--text3)')+';border:1px solid '+(ok?'rgba(0,217,126,.25)':'var(--border)')+'">'+lbl+(ok?'✓':'✗')+'</span>'; };
+  h += _mk('📐',_ca)+_mk('🎯',_cb)+_mk('🟠',_cc);
+  h += '<span style="font-family:\'JetBrains Mono\';font-size:.26rem;padding:1px 6px;border-radius:3px;background:rgba(61,142,248,.1);color:var(--blue);border:1px solid rgba(61,142,248,.25)">'+_mc+'/3</span>';
+  // Condition badges
+  h += '<span style="font-family:\'JetBrains Mono\';font-size:.26rem;padding:1px 5px;border-radius:3px;background:'+(condA2?'rgba(0,217,126,.12)':'rgba(255,255,255,.04)')+';color:'+(condA2?'var(--green)':'var(--text3)')+';border:1px solid '+(condA2?'rgba(0,217,126,.3)':'var(--border)')+'">📐'+(condA2?'✓':'✗')+'</span>';
+  h += '<span style="font-family:\'JetBrains Mono\';font-size:.26rem;padding:1px 5px;border-radius:3px;background:'+(condB2?'rgba(0,217,126,.12)':'rgba(255,255,255,.04)')+';color:'+(condB2?'var(--green)':'var(--text3)')+';border:1px solid '+(condB2?'rgba(0,217,126,.3)':'var(--border)')+'">🎯'+(condB2?'✓':'✗')+'</span>';
+  h += '<span style="font-family:\'JetBrains Mono\';font-size:.26rem;padding:1px 5px;border-radius:3px;background:'+(condC2?'rgba(0,217,126,.12)':'rgba(255,255,255,.04)')+';color:'+(condC2?'var(--green)':'var(--text3)')+';border:1px solid '+(condC2?'rgba(0,217,126,.3)':'var(--border)')+'">🟠'+(condC2?'✓':'✗')+'</span>';
+  h += '<span style="font-family:\'JetBrains Mono\';font-size:.28rem;padding:1px 5px;border-radius:3px;background:rgba(61,142,248,.1);color:var(--blue);border:1px solid rgba(61,142,248,.25)">'+metCount+'/3 met</span>';
   h += '<span style="font-family:\'JetBrains Mono\';font-size:.28rem;padding:2px 6px;border-radius:4px;background:rgba(61,142,248,.12);color:var(--blue);border:1px solid rgba(61,142,248,.25)">🔵 PRE-BRK</span>';
   h += '<span style="font-family:\'JetBrains Mono\';font-size:.28rem;padding:2px 6px;border-radius:4px;background:rgba(255,255,255,.04);color:var(--text3);border:1px solid var(--border)">'+et.badge+' '+et.type+'</span>';
   h += '</div>';
@@ -6639,7 +6664,7 @@ V9.sms.getFocusStocks = function() {
 };
 
 // ══════════════════════════════════════════
-// NSE PRO V9 — PATCH 1 END
+// NSE PRO V9 — PATCH 1 (Version 3) END
 // PASTE PART 8 DIRECTLY BELOW THIS LINE
 // ══════════════════════════════════════════
 // ═══════════════════════════════════════════
