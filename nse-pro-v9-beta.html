@@ -5904,6 +5904,744 @@ V9.ui.pct = function(n){ return (n>=0?'+':'')+n.toFixed(2)+'%'; };
 // NSE PRO V9 BETA — PART 7 END
 // PASTE PART 8 DIRECTLY BELOW THIS LINE
 // ══════════════════════════════════════════════
+   // ═══════════════════════════════════════════
+// NSE PRO V9 — PATCH 1
+// PRE-BREAKOUT Intelligence System
+//
+// Features:
+//   watchQueue engine
+//   PRE-BRK detector (coiling + volume dry)
+//   Move filter (no late alerts)
+//   Pullback entry (40% retrace)
+//   Momentum quality scorer
+//   Entry timing labeler
+//   Smart alert filter
+//   PRE-BRK tab UI + cards
+//
+// Paste AFTER Part 7, BEFORE Part 8
+// ═══════════════════════════════════════════
+
+// ══════════════════════════════════════════
+// PATCH STATE — extends V9.state
+// ══════════════════════════════════════════
+V9.state.watchQueue     = V9.state.watchQueue     || {};
+V9.state.prbkStocks     = V9.state.prbkStocks     || [];
+V9.state.priceHistory   = V9.state.priceHistory   || {}; // { sym: [p1,p2,p3,p4,p5] }
+V9.state.rangeHistory   = V9.state.rangeHistory   || {}; // { sym: [r1,r2,r3] }
+V9.state.volumeHistory  = V9.state.volumeHistory  || {}; // { sym: [v1,v2,v3] }
+V9.state.basePrice      = V9.state.basePrice      || {}; // { sym: consolidation base }
+
+var PRE_BRK_SCANS_NEEDED = 3;    // scans to confirm
+var PULLBACK_RETRACE_PCT  = 0.40; // 40% retrace
+var MOVE_FILTER_PCT       = 2.0;  // max move from base
+
+// ══════════════════════════════════════════
+// HISTORY TRACKERS
+// Called each scan per stock
+// ══════════════════════════════════════════
+V9.prbrk = V9.prbrk || {};
+
+V9.prbrk.storeHistory = function(sym, price, range, volX) {
+  var st = V9.state;
+
+  // Price history (last 5)
+  if(!st.priceHistory[sym]) st.priceHistory[sym] = [];
+  st.priceHistory[sym].push(price);
+  if(st.priceHistory[sym].length > 5) st.priceHistory[sym] = st.priceHistory[sym].slice(-5);
+
+  // Range history (last 3)
+  if(!st.rangeHistory[sym]) st.rangeHistory[sym] = [];
+  st.rangeHistory[sym].push(range);
+  if(st.rangeHistory[sym].length > 3) st.rangeHistory[sym] = st.rangeHistory[sym].slice(-3);
+
+  // Volume history (last 3)
+  if(!st.volumeHistory[sym]) st.volumeHistory[sym] = [];
+  st.volumeHistory[sym].push(volX);
+  if(st.volumeHistory[sym].length > 3) st.volumeHistory[sym] = st.volumeHistory[sym].slice(-3);
+};
+
+// ══════════════════════════════════════════
+// CONSOLIDATION BASE CALCULATOR
+// Base = average of last 3 price lows
+// ══════════════════════════════════════════
+V9.prbrk.calcBase = function(sym, low) {
+  var st   = V9.state;
+  var hist = st.priceHistory[sym];
+  if(!hist || hist.length < 2) {
+    st.basePrice[sym] = low;
+    return low;
+  }
+  // Base = min price in recent history
+  var base = Math.min.apply(null, hist);
+  st.basePrice[sym] = base;
+  return base;
+};
+
+// ══════════════════════════════════════════
+// MOVE FILTER
+// Returns true if stock already moved too much
+// ══════════════════════════════════════════
+V9.prbrk.isMoved = function(sym, price, chg) {
+  var st   = V9.state;
+  var base = st.basePrice[sym] || price;
+
+  // Price move from base
+  var moveFromBase = base > 0 ? (price - base) / base * 100 : 0;
+
+  // Large candle body check (chg > 1.5% = momentum already started)
+  var largCandle = Math.abs(chg) > 1.5;
+
+  return {
+    isMoved:      moveFromBase > MOVE_FILTER_PCT || largCandle,
+    moveFromBase: moveFromBase,
+    largCandle:   largCandle,
+    base:         base
+  };
+};
+
+// ══════════════════════════════════════════
+// RANGE COMPRESSION DETECTOR
+// True if range shrinking over last 2 scans
+// ══════════════════════════════════════════
+V9.prbrk.isCompressing = function(sym, currentRange) {
+  var hist = V9.state.rangeHistory[sym];
+  if(!hist || hist.length < 2) return {compressing:false, strength:0};
+
+  var prev1 = hist[hist.length - 1];
+  var prev2 = hist.length >= 2 ? hist[hist.length - 2] : prev1;
+
+  // Range shrinking = compression
+  var shrinking1 = currentRange < prev1;
+  var shrinking2 = prev1 < prev2;
+  var compressing = shrinking1; // at least 1 scan of compression
+  var bothShrink  = shrinking1 && shrinking2; // 2 scans = stronger
+
+  // Compression strength (how tight)
+  var strength = currentRange > 0 ? Math.min(100, (1 - currentRange/Math.max(prev2,0.001)) * 100) : 0;
+
+  return {
+    compressing:  compressing,
+    bothShrink:   bothShrink,
+    strength:     Math.max(0, strength).toFixed(1),
+    currentRange: currentRange,
+    prevRange:    prev1
+  };
+};
+
+// ══════════════════════════════════════════
+// VOLUME DRY DETECTOR
+// True if volume below avg in last 2 scans
+// ══════════════════════════════════════════
+V9.prbrk.isVolumeDrying = function(sym, currentVolX) {
+  var hist = V9.state.volumeHistory[sym];
+  if(!hist || hist.length < 1) return {drying:false, returning:false, status:'UNKNOWN'};
+
+  var avgVol = hist.reduce(function(a,v){return a+v;},0) / hist.length;
+
+  var drying    = currentVolX < 0.9;  // volume clearly below avg
+  var returning = hist.length >= 2 &&
+    currentVolX > hist[hist.length-1] && currentVolX >= 1.2; // vol coming back
+
+  var status = returning ? 'RETURNING' : drying ? 'DRYING' : 'NORMAL';
+
+  return {
+    drying:    drying,
+    returning: returning,
+    status:    status,
+    currentX:  currentVolX,
+    avgX:      avgVol.toFixed(1)
+  };
+};
+
+// ══════════════════════════════════════════
+// MOMENTUM QUALITY SCORER
+// 🔥 STRONG / ⚠️ WEAK / 💤 SIDEWAYS
+// ══════════════════════════════════════════
+V9.prbrk.calcMomentumQuality = function(sym, chg, volX, hp, high, low, price) {
+  var volHist  = V9.state.volumeHistory[sym] || [];
+  var priceHist= V9.state.priceHistory[sym]  || [];
+
+  // Volume consistency — is volume expanding consistently?
+  var volExpanding = volHist.length >= 2 &&
+    volHist[volHist.length-1] > volHist[volHist.length-2];
+
+  // Wick size — large wicks = reversal risk
+  var totalRange   = high - low;
+  var bodySize     = Math.abs(chg);
+  var wickRatio    = totalRange > 0 ? (totalRange * price/100 - bodySize * price/100) / (totalRange * price/100) : 0;
+  var largeWick    = wickRatio > 0.5; // wick > 50% of range = reversal risk
+
+  // Price structure — higher highs?
+  var higherHighs  = false;
+  if(priceHist.length >= 3) {
+    var h1 = priceHist[priceHist.length-1];
+    var h2 = priceHist[priceHist.length-2];
+    var h3 = priceHist[priceHist.length-3];
+    higherHighs = h1 > h2 && h2 > h3;
+  }
+
+  // Sideways check
+  var isSideways = Math.abs(chg) < 0.3 && volX < 1.2;
+
+  // Score
+  var score = 0;
+  if(volExpanding) score += 2;
+  if(!largeWick)   score += 2;
+  if(higherHighs)  score += 2;
+  if(hp >= 60)     score += 1;
+  if(volX >= 1.5)  score += 1;
+  if(isSideways)   score  = 1;
+
+  var quality, emoji;
+  if(isSideways)        { quality='SIDEWAYS';    emoji='💤'; }
+  else if(score >= 5)   { quality='STRONG';      emoji='🔥'; }
+  else if(score >= 3)   { quality='MODERATE';    emoji='📊'; }
+  else if(largeWick)    { quality='REVERSAL';    emoji='⚠️'; }
+  else                  { quality='WEAK';        emoji='⚠️'; }
+
+  return {quality:quality, emoji:emoji, score:score,
+    volExpanding:volExpanding, largeWick:largeWick, higherHighs:higherHighs};
+};
+
+// ══════════════════════════════════════════
+// PULLBACK DETECTOR (40% retrace)
+// ══════════════════════════════════════════
+V9.prbrk.checkPullback = function(sym, price, chg) {
+  var st       = V9.state;
+  var priceHist= st.priceHistory[sym];
+  if(!priceHist || priceHist.length < 3) return {isPullback:false};
+
+  // Find recent peak
+  var peak = Math.max.apply(null, priceHist);
+  var base = st.basePrice[sym] || Math.min.apply(null, priceHist);
+
+  var totalMove  = peak - base;
+  if(totalMove <= 0) return {isPullback:false};
+
+  var retrace    = (peak - price) / totalMove * 100;
+  var isPullback = retrace >= 35 && retrace <= 55 && // 35-55% retrace window
+                   chg >= -0.5;                       // not still falling
+
+  return {
+    isPullback: isPullback,
+    retracePct: retrace.toFixed(1),
+    peak:       peak,
+    base:       base,
+    totalMove:  totalMove.toFixed(2)
+  };
+};
+
+// ══════════════════════════════════════════
+// ENTRY TIMING LABEL
+// ══════════════════════════════════════════
+V9.prbrk.getEntryTiming = function(moveCheck, pullback, momentumQ, volStatus) {
+  if(pullback.isPullback)
+    return {type:'PULLBACK ENTRY', badge:'🟠', class:'et-pullback', ok:true};
+
+  if(moveCheck.isMoved && !pullback.isPullback)
+    return {type:'LATE — AVOID',   badge:'🔴', class:'et-late',    ok:false};
+
+  if(!moveCheck.isMoved && momentumQ.quality==='STRONG')
+    return {type:'EARLY BREAKOUT', badge:'🟢', class:'et-breakout', ok:true};
+
+  if(!moveCheck.isMoved && momentumQ.quality==='SIDEWAYS')
+    return {type:'EARLY BREAKOUT', badge:'🔵', class:'et-blue',    ok:true};
+
+  return   {type:'WAIT — WEAK',    badge:'⚪', class:'et-wait',    ok:false};
+};
+
+// ══════════════════════════════════════════
+// PRE-BREAKOUT DETECTOR — MAIN FUNCTION
+// Called on every stock in every scan
+// ══════════════════════════════════════════
+V9.prbrk.detect = function(stock) {
+  var s    = stock;
+  var sym  = s.sym;
+  var st   = V9.state;
+
+  // Store history first
+  var range = s.high > s.low ? (s.high - s.low) / s.price * 100 : 0;
+  V9.prbrk.storeHistory(sym, s.price, range, s.volX);
+  V9.prbrk.calcBase(sym, s.low);
+
+  // Run all detectors
+  var compress = V9.prbrk.isCompressing(sym, range);
+  var volStat  = V9.prbrk.isVolumeDrying(sym, s.volX);
+  var moveChk  = V9.prbrk.isMoved(sym, s.price, s.chg);
+  var pullback = V9.prbrk.checkPullback(sym, s.price, s.chg);
+  var momQ     = V9.prbrk.calcMomentumQuality(sym, s.chg, s.volX, s.hp, s.high, s.low, s.price);
+  var entryT   = V9.prbrk.getEntryTiming(moveChk, pullback, momQ, volStat);
+
+  // RSI sweet spot (45-65) — not extended
+  var rsiOk = s.rsi ? (s.rsi >= 42 && s.rsi <= 68) : true;
+
+  // PRE-BRK qualification
+  var isPREBRK = (
+    (compress.compressing || pullback.isPullback) &&
+    (volStat.drying || volStat.returning || pullback.isPullback) &&
+    !moveChk.isMoved &&
+    rsiOk &&
+    s.sms >= 35  // low bar — catch early
+  );
+
+  return {
+    isPREBRK:    isPREBRK,
+    compress:    compress,
+    volStat:     volStat,
+    moveChk:     moveChk,
+    pullback:    pullback,
+    momQ:        momQ,
+    entryTiming: entryT,
+    range:       range,
+    rsiOk:       rsiOk
+  };
+};
+
+// ══════════════════════════════════════════
+// WATCH QUEUE ENGINE
+// 3-scan confirmation system
+// ══════════════════════════════════════════
+V9.prbrk.updateQueue = function(stock, prbrkResult) {
+  var st  = V9.state;
+  var sym = stock.sym;
+  var wq  = st.watchQueue;
+
+  if(!prbrkResult.isPREBRK) {
+    // Remove from queue if no longer qualifying
+    if(wq[sym]) {
+      var elapsed = Date.now() - wq[sym].firstSeen;
+      // Keep for 2 min after detection, then remove if not confirming
+      if(elapsed > 120000) delete wq[sym];
+    }
+    return null;
+  }
+
+  if(!wq[sym]) {
+    // First detection — add to queue
+    wq[sym] = {
+      sym:          sym,
+      firstSeen:    Date.now(),
+      firstSMS:     stock.sms,
+      firstPrice:   stock.price,
+      scanCount:    1,
+      lastSMS:      stock.sms,
+      lastVolX:     stock.volX,
+      confirmed:    false,
+      alertFired:   false,
+      prbrkResult:  prbrkResult
+    };
+    return 'DETECTED';
+  }
+
+  // Already in queue — update
+  var entry     = wq[sym];
+  entry.scanCount++;
+  entry.prbrkResult = prbrkResult;
+
+  // Check if SMS is still rising
+  var smsRising = stock.sms >= entry.lastSMS;
+  // Check volume returning
+  var volRet    = prbrkResult.volStat.returning || stock.volX > entry.lastVolX;
+
+  entry.lastSMS  = stock.sms;
+  entry.lastVolX = stock.volX;
+
+  // If SMS falling significantly → remove
+  if(stock.sms < entry.firstSMS - 10) {
+    delete wq[sym];
+    return 'DROPPED';
+  }
+
+  // Confirmed after 3 scans with SMS rising
+  if(entry.scanCount >= PRE_BRK_SCANS_NEEDED && smsRising && !entry.confirmed) {
+    entry.confirmed = true;
+    return 'CONFIRMED';
+  }
+
+  return entry.scanCount >= PRE_BRK_SCANS_NEEDED ? 'CONFIRMING' : 'WATCHING';
+};
+
+// ══════════════════════════════════════════
+// SMART ALERT FILTER
+// Only alert if ALL conditions met
+// ══════════════════════════════════════════
+V9.prbrk.canSendAlert = function(stock, prbrkResult, queueStatus) {
+  if(queueStatus !== 'CONFIRMED') return false;
+  var wq = V9.state.watchQueue[stock.sym];
+  if(!wq || wq.alertFired) return false;
+
+  var r = prbrkResult;
+  return (
+    !r.moveChk.isMoved &&           // move < 2%
+    stock.sms >= wq.firstSMS &&      // SMS still rising
+    r.momQ.quality !== 'WEAK' &&     // momentum not weak
+    r.momQ.quality !== 'REVERSAL' && // no reversal signs
+    r.entryTiming.ok                 // valid entry type
+  );
+};
+
+// ══════════════════════════════════════════
+// PRE-BRK PROCESSOR
+// Called after every scan batch
+// ══════════════════════════════════════════
+V9.prbrk.processBatch = function() {
+  var st       = V9.state;
+  var all      = st.allStocks;
+  var prbkList = [];
+
+  all.forEach(function(stock) {
+    var result      = V9.prbrk.detect(stock);
+    var queueStatus = V9.prbrk.updateQueue(stock, result);
+
+    if(!result.isPREBRK && !st.watchQueue[stock.sym]) return;
+
+    var wq      = st.watchQueue[stock.sym];
+    if(!wq) return;
+
+    var scanLabel = wq.scanCount === 1 ? 'Scan 1/3 — Detected' :
+                    wq.scanCount === 2 ? 'Scan 2/3 — Recheck' :
+                    wq.scanCount >= 3 && !wq.confirmed ? 'Scan 3/3 — Confirming' :
+                    wq.confirmed ? '✅ Confirmed' : 'Watching';
+
+    var elapsedMin = Math.floor((Date.now() - wq.firstSeen) / 60000);
+    var elapsedSec = Math.floor((Date.now() - wq.firstSeen) / 1000) % 60;
+    var timeStr    = elapsedMin > 0 ?
+      elapsedMin + 'm ' + elapsedSec + 's ago' : elapsedSec + 's ago';
+
+    // Smart alert — only if all conditions met
+    if(V9.prbrk.canSendAlert(stock, result, queueStatus)) {
+      wq.alertFired = true;
+      // Fire EARLY alert in intraday (via existing system)
+      stock.preBrkConfirmed = true;
+      V9.alerts.fireStageAlert(stock, 'EARLY');
+    }
+
+    // If confirmed → enrich stock and move to INTRADAY
+    if(wq.confirmed) {
+      stock.preBrkConfirmed  = true;
+      stock.preBrkEntryType  = result.entryTiming.type;
+      // Remove from PRE-BRK tab (shown in INTRADAY now)
+      if(elapsedMin >= 3) delete st.watchQueue[stock.sym];
+      return; // don't add to PRE-BRK list anymore
+    }
+
+    prbkList.push(Object.assign({}, stock, {
+      prbrkResult:  result,
+      queueStatus:  queueStatus,
+      scanLabel:    scanLabel,
+      timeStr:      timeStr,
+      scanCount:    wq.scanCount,
+      firstSMS:     wq.firstSMS,
+      firstPrice:   wq.firstPrice
+    }));
+  });
+
+  // Sort by scan count desc (most advanced first)
+  prbkList.sort(function(a,b){ return b.scanCount - a.scanCount; });
+  st.prbkStocks = prbkList;
+
+  // Update badge
+  var badge = document.getElementById('badge-prebrk');
+  if(badge){
+    badge.textContent = prbkList.length > 0 ? prbkList.length : '';
+    badge.classList.toggle('show', prbkList.length > 0);
+  }
+
+  // Render if on PRE-BRK tab
+  if(st.activeTab === 'prebrk') V9.ui.renderPRBK();
+};
+
+// ══════════════════════════════════════════
+// HOOK INTO SCAN ENGINE
+// Called after rebuildAllStocks
+// ══════════════════════════════════════════
+var _origRebuild = V9.data.rebuildAllStocks;
+V9.data.rebuildAllStocks = function() {
+  _origRebuild.call(this);
+  // Run PRE-BRK processor after each rebuild
+  try { V9.prbrk.processBatch(); } catch(e) { console.warn('PRE-BRK error:', e); }
+};
+
+// ══════════════════════════════════════════
+// PRE-BRK CARD BUILDER
+// ══════════════════════════════════════════
+V9.ui.buildPRBKCard = function(s) {
+  var r    = s.prbrkResult || {};
+  var comp = r.compress    || {strength:0, compressing:false};
+  var vol  = r.volStat     || {status:'UNKNOWN', currentX:0};
+  var momQ = r.momQ        || {quality:'SIDEWAYS', emoji:'💤'};
+  var et   = r.entryTiming || {type:'WAIT', badge:'⚪', class:'et-wait', ok:false};
+  var pb   = r.pullback    || {isPullback:false};
+  var mv   = r.moveChk     || {moveFromBase:0, isMoved:false};
+
+  var scanPct  = Math.min((s.scanCount||1) / PRE_BRK_SCANS_NEEDED * 100, 100);
+  var scanCol  = scanPct >= 100 ? 'var(--green)' : scanPct >= 66 ? 'var(--amber)' : 'var(--blue)';
+  var compPct  = Math.min(parseFloat(comp.strength||0), 100);
+  var volCol   = vol.status==='RETURNING' ? 'var(--green)' : vol.status==='DRYING' ? 'var(--amber)' : 'var(--text3)';
+  var volEmoji = vol.status==='RETURNING' ? '📈' : vol.status==='DRYING' ? '📉' : '📊';
+  var movCol   = mv.isMoved ? 'var(--red)' : 'var(--green)';
+
+  var h = '';
+  h += '<div class="stock-card" style="border-left:3px solid var(--blue);background:rgba(61,142,248,.04);cursor:pointer" onclick="V9.ui.openDetail(\''+s.sym+'\')">';
+
+  // ── ROW 1: Header ──
+  h += '<div class="sc-row1">';
+  h += '<div class="sc-left">';
+  h += '<div class="sc-sym">🔵 '+s.sym;
+  if(pb.isPullback) h += ' <span style="font-family:\'JetBrains Mono\';font-size:.26rem;color:var(--amber)">🟠 PULLBACK</span>';
+  h += '</div>';
+  h += '<div class="sc-sec">'+s.sec+'</div>';
+  h += '<div class="sc-tags" style="margin-top:4px">';
+  h += '<span style="font-family:\'JetBrains Mono\';font-size:.28rem;padding:2px 6px;border-radius:4px;background:rgba(61,142,248,.12);color:var(--blue);border:1px solid rgba(61,142,248,.25)">🔵 PRE-BRK</span>';
+  h += '<span style="font-family:\'JetBrains Mono\';font-size:.28rem;padding:2px 6px;border-radius:4px;background:rgba(255,255,255,.04);color:var(--text3);border:1px solid var(--border)">'+et.badge+' '+et.type+'</span>';
+  h += '</div>';
+  h += '</div>';
+  h += '<div class="sc-right">';
+  h += '<div class="sc-price">₹'+s.price.toLocaleString('en-IN')+'</div>';
+  h += '<div class="sc-chg '+(s.chg>=0?'up':'dn')+'">'+(s.chg>=0?'+':'')+s.chg.toFixed(2)+'%</div>';
+  h += '<div style="font-family:\'JetBrains Mono\';font-size:.28rem;color:var(--text3);margin-top:2px">SMS '+s.sms+'</div>';
+  h += '</div>';
+  h += '</div>'; // end row1
+
+  // ── SCAN PROGRESS ──
+  h += '<div style="margin:6px 0">';
+  h += '<div style="display:flex;justify-content:space-between;margin-bottom:3px">';
+  h += '<span style="font-family:\'JetBrains Mono\';font-size:.3rem;color:'+scanCol+'">'+s.scanLabel+'</span>';
+  h += '<span style="font-family:\'JetBrains Mono\';font-size:.28rem;color:var(--text3)">'+s.timeStr+'</span>';
+  h += '</div>';
+  h += '<div style="height:4px;background:var(--border);border-radius:4px;overflow:hidden">';
+  h += '<div style="height:100%;width:'+scanPct+'%;background:'+scanCol+';border-radius:4px;transition:width .5s"></div>';
+  h += '</div>';
+  h += '</div>';
+
+  // ── RANGE COMPRESSION ──
+  h += '<div style="display:flex;gap:6px;margin:5px 0">';
+  // Compression meter
+  h += '<div style="flex:1;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:var(--r3);padding:5px 7px">';
+  h += '<div style="font-family:\'JetBrains Mono\';font-size:.26rem;color:var(--text3);margin-bottom:2px">📐 RANGE COMPRESSION</div>';
+  h += '<div style="height:4px;background:var(--border);border-radius:4px;overflow:hidden">';
+  h += '<div style="height:100%;width:'+compPct+'%;background:var(--blue);border-radius:4px;transition:width .5s"></div>';
+  h += '</div>';
+  h += '<div style="font-family:\'JetBrains Mono\';font-size:.3rem;color:var(--blue);margin-top:2px">'+comp.strength+'% compressed'+(comp.bothShrink?' ✅':'')+' </div>';
+  h += '</div>';
+  // Volume status
+  h += '<div style="flex:1;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:var(--r3);padding:5px 7px">';
+  h += '<div style="font-family:\'JetBrains Mono\';font-size:.26rem;color:var(--text3);margin-bottom:2px">'+volEmoji+' VOLUME</div>';
+  h += '<div style="font-family:\'JetBrains Mono\';font-size:.38rem;font-weight:600;color:'+volCol+'">'+vol.status+'</div>';
+  h += '<div style="font-family:\'JetBrains Mono\';font-size:.28rem;color:var(--text3);margin-top:1px">'+s.volX.toFixed(1)+'x avg</div>';
+  h += '</div>';
+  h += '</div>';
+
+  // ── MOMENTUM + MOVE ──
+  h += '<div style="display:flex;gap:6px;margin:5px 0">';
+  // Momentum quality
+  h += '<div style="flex:1;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:var(--r3);padding:5px 7px">';
+  h += '<div style="font-family:\'JetBrains Mono\';font-size:.26rem;color:var(--text3);margin-bottom:2px">MOMENTUM</div>';
+  h += '<div style="font-family:\'JetBrains Mono\';font-size:.36rem;font-weight:600">'+momQ.emoji+' '+momQ.quality+'</div>';
+  h += '</div>';
+  // Move from base
+  h += '<div style="flex:1;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:var(--r3);padding:5px 7px">';
+  h += '<div style="font-family:\'JetBrains Mono\';font-size:.26rem;color:var(--text3);margin-bottom:2px">MOVE FROM BASE</div>';
+  h += '<div style="font-family:\'JetBrains Mono\';font-size:.36rem;font-weight:600;color:'+movCol+'">';
+  h += (mv.moveFromBase >= 0 ? '+' : '') + mv.moveFromBase.toFixed(1) + '%';
+  h += mv.isMoved ? ' ⚠️' : ' ✅';
+  h += '</div>';
+  h += '</div>';
+  h += '</div>';
+
+  // ── PULLBACK INFO ──
+  if(pb.isPullback) {
+    h += '<div style="background:var(--amberl);border:1px solid rgba(255,176,32,.2);border-radius:var(--r3);padding:6px 8px;margin:5px 0">';
+    h += '<div style="font-family:\'JetBrains Mono\';font-size:.32rem;color:var(--amber)">🟠 PULLBACK ENTRY</div>';
+    h += '<div style="font-family:\'JetBrains Mono\';font-size:.3rem;color:var(--text2);margin-top:2px">'+pb.retracePct+'% retrace from ₹'+pb.peak.toFixed(1)+'</div>';
+    h += '<div style="font-family:\'JetBrains Mono\';font-size:.28rem;color:var(--text3);margin-top:1px">Base: ₹'+pb.base.toFixed(1)+' | Move: ₹'+pb.totalMove+'</div>';
+    h += '</div>';
+  }
+
+  // ── LATE WARNING ──
+  if(mv.isMoved && !pb.isPullback) {
+    h += '<div style="background:var(--redl);border:1px solid rgba(255,69,96,.2);border-radius:var(--r3);padding:5px 8px;margin:5px 0">';
+    h += '<div style="font-family:\'JetBrains Mono\';font-size:.32rem;color:var(--red)">🔴 LATE ENTRY — AVOID</div>';
+    h += '<div style="font-family:\'JetBrains Mono\';font-size:.28rem;color:var(--text3);margin-top:1px">Already moved '+mv.moveFromBase.toFixed(1)+'% from base — wait for pullback</div>';
+    h += '</div>';
+  }
+
+  // ── FIRST SMS ──
+  if(s.firstSMS && s.firstSMS !== s.sms) {
+    var smsDelta = s.sms - s.firstSMS;
+    h += '<div style="font-family:\'JetBrains Mono\';font-size:.3rem;color:var(--text3);margin-top:4px">';
+    h += 'SMS since detection: '+s.firstSMS+' → '+s.sms;
+    h += ' <span style="color:'+(smsDelta>=0?'var(--green)':'var(--red)')+'">'+(smsDelta>=0?'▲+':'▼')+smsDelta+'</span>';
+    h += '</div>';
+  }
+
+  h += '</div>'; // end card
+  return h;
+};
+
+// ══════════════════════════════════════════
+// PRE-BRK SCREEN RENDERER
+// ══════════════════════════════════════════
+V9.ui.renderPRBK = function() {
+  var st  = V9.state;
+  var el  = document.getElementById('scrPrbkList'); if(!el) return;
+  var list= st.prbkStocks || [];
+
+  // Update count
+  var cnt = document.getElementById('prbkCount');
+  if(cnt) cnt.textContent = list.length;
+
+  // Queue size
+  var qsize = Object.keys(st.watchQueue).length;
+  var qel   = document.getElementById('prbkQueueSize');
+  if(qel) qel.textContent = qsize;
+
+  if(!list.length) {
+    el.innerHTML =
+      '<div class="empty" style="padding-top:40px">'+
+      '🔍<br><br>'+
+      'No pre-breakout candidates<br>'+
+      '<span style="font-size:.85em;opacity:.6">Scanner detects coiling + volume dry patterns<br>Watching '+qsize+' stocks in queue</span>'+
+      '</div>';
+    return;
+  }
+
+  el.innerHTML = list.map(function(s){ return V9.ui.buildPRBKCard(s); }).join('');
+};
+
+// ══════════════════════════════════════════
+// INJECT PRE-BRK TAB INTO DOM
+// DASH | PRE-BRK | INTRADAY | SWING | WATCH | MORE
+// ══════════════════════════════════════════
+(function injectPRBKTab() {
+  // ── 1. Add screen HTML ──
+  var mainContent = document.getElementById('mainContent');
+  if(!mainContent) return;
+
+  var scrDiv = document.createElement('div');
+  scrDiv.className = 'screen';
+  scrDiv.id = 'scrPrebrk';
+  scrDiv.innerHTML =
+    '<div class="screen-inner">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
+    '<div>'+
+    '<div style="font-family:\'Outfit\';font-weight:700;font-size:.95rem">🔵 PRE-BREAKOUT</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.3rem;color:var(--text3);margin-top:1px">'+
+    'Preparation zone · <span id="prbkCount">0</span> candidates · Queue: <span id="prbkQueueSize">0</span>'+
+    '</div>'+
+    '</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.3rem;color:var(--text3);text-align:right">'+
+    '3-scan confirm<br>No alerts here'+
+    '</div>'+
+    '</div>'+
+
+    // Info box
+    '<div style="background:rgba(61,142,248,.06);border:1px solid rgba(61,142,248,.2);border-radius:var(--r);padding:10px 12px;margin-bottom:10px">'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.34rem;color:var(--blue);margin-bottom:5px">📖 HOW IT WORKS</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.3rem;color:var(--text2);line-height:1.8">'+
+    '📐 Scan 1 → Coiling + volume drying detected<br>'+
+    '🔍 Scan 2 → Recheck — is SMS still building?<br>'+
+    '✅ Scan 3 → Confirmed → moves to INTRADAY tab<br>'+
+    '🟠 Pullback → 40% retrace after a move detected<br>'+
+    '🔴 Late → Already moved >2% — wait for pullback'+
+    '</div>'+
+    '</div>'+
+
+    '<div id="scrPrbkList"><div class="empty">Scanning…</div></div>'+
+    '</div>';
+
+  mainContent.appendChild(scrDiv);
+
+  // ── 2. Rebuild bottom nav ──
+  var bnav = document.querySelector('.bnav');
+  if(!bnav) return;
+
+  bnav.innerHTML =
+    '<button class="btab on"  id="tab-dash"    onclick="V9.ui.goTab(\'dash\')">    <div class="btab-icon">📊</div>DASH</button>'+
+    '<button class="btab"     id="tab-prebrk"  onclick="V9.ui.goTab(\'prebrk\')">  <div class="btab-icon">🔵</div>PRE-BRK<div class="btab-badge" id="badge-prebrk"></div></button>'+
+    '<button class="btab"     id="tab-intraday"onclick="V9.ui.goTab(\'intraday\')">'+'<div class="btab-icon">⚡</div>INTRADAY<div class="btab-badge" id="badge-intraday"></div></button>'+
+    '<button class="btab"     id="tab-swing"   onclick="V9.ui.goTab(\'swing\')">   <div class="btab-icon">📈</div>SWING<div class="btab-badge" id="badge-swing"></div></button>'+
+    '<button class="btab"     id="tab-watch"   onclick="V9.ui.goTab(\'watch\')">   <div class="btab-icon">⭐</div>WATCH</button>'+
+    '<button class="btab"     id="tab-more"    onclick="V9.ui.goTab(\'more\')">    <div class="btab-icon">☰</div>MORE</button>';
+
+  // ── 3. Extend goTab to handle prebrk ──
+  var _origGoTab = V9.ui.goTab;
+  V9.ui.goTab = function(t) {
+    V9.state.activeTab = t;
+    // Update all tab buttons
+    ['dash','prebrk','intraday','swing','watch','more'].forEach(function(id){
+      var el = document.getElementById('tab-'+id);
+      if(el) el.classList.toggle('on', id === t);
+    });
+    // Show/hide screens
+    var allScreens = ['dash','prebrk','intraday','swing','news','watch','more',
+                      'settings','indicators','alerts','simulation','journal','discipline'];
+    allScreens.forEach(function(id) {
+      var el = document.getElementById('scr'+id.charAt(0).toUpperCase()+id.slice(1));
+      if(!el) el = document.getElementById('scr-'+id);
+      if(el) el.className = 'screen' + (id === t ? ' on' : '');
+    });
+    var mc = document.getElementById('mainContent'); if(mc) mc.scrollTop = 0;
+    V9.ui.closeDetail();
+    // Tab-specific renders
+    if(t === 'dash')     V9.ui.renderDash();
+    if(t === 'prebrk')   V9.ui.renderPRBK();
+    if(t === 'intraday') V9.ui.renderIntraday();
+    if(t === 'swing')    V9.ui.renderSwing();
+    if(t === 'watch')    V9.ui.renderWL();
+    if(t === 'more')     V9.ui.renderMore();
+  };
+
+  // ── 4. Add CSS for new elements ──
+  var style = document.createElement('style');
+  style.textContent =
+    '.et-late{background:var(--redl);color:var(--red);border:1px solid rgba(255,69,96,.2);}'+
+    '.et-blue{background:var(--bluel);color:var(--blue);border:1px solid rgba(61,142,248,.2);}'+
+    '.et-wait{background:rgba(255,255,255,.04);color:var(--text3);border:1px solid var(--border);}';
+  document.head.appendChild(style);
+
+  console.log('NSE PRO V9 — PRE-BRK tab injected');
+})();
+
+// ══════════════════════════════════════════
+// STOCK CARD ENHANCEMENT
+// Add PRE-BRK confirmed badge + entry type
+// to INTRADAY cards that were confirmed
+// ══════════════════════════════════════════
+var _origBuildCard = V9.ui.buildStockCard;
+V9.ui.buildStockCard = function(s) {
+  var html = _origBuildCard.call(this, s);
+  // If pre-breakout confirmed — add badge after sym
+  if(s.preBrkConfirmed) {
+    html = html.replace(
+      'class="sc-sym">'+s.sym,
+      'class="sc-sym">'+s.sym+
+      ' <span style="font-family:\'JetBrains Mono\';font-size:.24rem;background:rgba(61,142,248,.15);color:var(--blue);border:1px solid rgba(61,142,248,.3);padding:1px 5px;border-radius:3px">✅ PRE-BRK</span>'
+    );
+  }
+  return html;
+};
+
+// ══════════════════════════════════════════
+// FOCUS MODE ENHANCEMENT
+// Prefer PRE-BRK confirmed stocks
+// ══════════════════════════════════════════
+var _origGetFocus = V9.sms.getFocusStocks;
+V9.sms.getFocusStocks = function() {
+  var base = _origGetFocus.call(this);
+  // Boost pre-brk confirmed stocks to top of focus
+  base.sort(function(a,b){
+    if(a.preBrkConfirmed && !b.preBrkConfirmed) return -1;
+    if(b.preBrkConfirmed && !a.preBrkConfirmed) return 1;
+    return (b.priority||0) - (a.priority||0);
+  });
+  return base.slice(0,3);
+};
+
+// ══════════════════════════════════════════
+// NSE PRO V9 — PATCH 1 END
+// PASTE PART 8 DIRECTLY BELOW THIS LINE
+// ══════════════════════════════════════════
 // ═══════════════════════════════════════════
 // NSE PRO V9 BETA — PART 8 (FINAL)
 // Boot Sequence + V9.init + Closing Tags
