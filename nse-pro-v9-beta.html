@@ -6667,6 +6667,805 @@ V9.sms.getFocusStocks = function() {
 // NSE PRO V9 — PATCH 1 (Version 3) END
 // PASTE PART 8 DIRECTLY BELOW THIS LINE
 // ══════════════════════════════════════════
+   // ═══════════════════════════════════════════
+// NSE PRO V9 — PATCH 2A
+// Smart Exit Engine
+//
+// Features:
+//   5 exit conditions
+//   Trailing stop (+1.5% lock, +2.5% trail)
+//   VWAP break exit condition
+//   HOLD / WEAKENING / EXIT NOW on cards
+//   3:10 PM force exit alert
+//   Exit reason logger
+//   Telegram exit alerts (real trade mode)
+//
+// Paste AFTER Patch 1, BEFORE Part 8
+// Real trades only — alerts, no auto-exit
+// ═══════════════════════════════════════════
+
+// ══════════════════════════════════════════
+// EXIT ENGINE STATE
+// ══════════════════════════════════════════
+V9.state.exitEngine = V9.state.exitEngine || {
+  // Active real trade monitoring
+  // { sym: { entryPrice, entryTime, entryStage,
+  //          peakPrice, lockedProfitPct,
+  //          trailingStop, alertFired,
+  //          exitReason, status } }
+  positions:   {},
+
+  // Exit reason log
+  // [{ sym, reason, price, time, pnlEst, ts }]
+  exitLog:     [],
+
+  // SMS snapshot per stock for drop detection
+  smsSnap:     {},   // { sym: [s1,s2,s3] }
+
+  // Sector snap for weakness detection
+  secSnap:     {},   // { secName: [avg1,avg2] }
+
+  // Force exit flag (3:10 PM)
+  forceExitFired: false
+};
+
+// ══════════════════════════════════════════
+// EXIT ENGINE NAMESPACE
+// ══════════════════════════════════════════
+V9.exit = V9.exit || {};
+
+// ── CONSTANTS ──
+var EXIT_SMS_DROP      = 10;   // SMS drop points to trigger exit
+var EXIT_VOL_MIN       = 1.0;  // volume below this = exit
+var EXIT_LOCK_PCT      = 1.5;  // lock profit at +1.5%
+var EXIT_TRAIL_PCT     = 2.5;  // start trailing at +2.5%
+var EXIT_TRAIL_STEP    = 0.5;  // trail step size
+var EXIT_FORCE_MINS    = 870;  // 3:10 PM in minutes (14*60+30=870... 15*60+10=910)
+var EXIT_WARN_MINS     = 900;  // 3:00 PM warning
+
+// ══════════════════════════════════════════
+// ADD POSITION TO MONITOR
+// Called when user enters a real trade
+// ══════════════════════════════════════════
+V9.exit.addPosition = function(sym, entryPrice, sig) {
+  var st  = V9.state;
+  var ee  = st.exitEngine;
+  var now = new Date();
+
+  ee.positions[sym] = {
+    sym:          sym,
+    entryPrice:   entryPrice,
+    entryTime:    pad(now.getHours())+':'+pad(now.getMinutes()),
+    entryTs:      Date.now(),
+    sig:          sig || 'BUY',
+    peakPrice:    entryPrice,
+    lockedAt:     null,     // price at which profit locked
+    trailingStop: null,     // dynamic SL
+    alertFired:   {},       // { reason: timestamp }
+    exitReason:   null,
+    status:       'HOLD',   // HOLD / WEAKENING / EXIT
+    pnlPct:       0
+  };
+
+  V9.exit.renderPositions();
+  V9.ui.showToast('📍 Monitoring — '+sym,'Exit engine active · Entry: ₹'+entryPrice.toFixed(2),'toast-trade');
+  try{ localStorage.setItem('v9_exit_pos', JSON.stringify(ee.positions)); }catch(e){}
+};
+
+// ══════════════════════════════════════════
+// REMOVE POSITION
+// ══════════════════════════════════════════
+V9.exit.removePosition = function(sym, reason) {
+  var ee = V9.state.exitEngine;
+  delete ee.positions[sym];
+  V9.exit.renderPositions();
+  try{ localStorage.setItem('v9_exit_pos', JSON.stringify(ee.positions)); }catch(e){}
+};
+
+// ══════════════════════════════════════════
+// SMS SNAPSHOT TRACKER
+// ══════════════════════════════════════════
+V9.exit.storeSMSSnap = function(sym, sms) {
+  var snaps = V9.state.exitEngine.smsSnap;
+  if(!snaps[sym]) snaps[sym] = [];
+  snaps[sym].push(sms);
+  if(snaps[sym].length > 3) snaps[sym] = snaps[sym].slice(-3);
+};
+
+V9.exit.getSMSDrop = function(sym) {
+  var snaps = V9.state.exitEngine.smsSnap[sym];
+  if(!snaps || snaps.length < 2) return 0;
+  var latest = snaps[snaps.length-1];
+  var prev   = Math.max.apply(null, snaps.slice(0,-1)); // peak from history
+  return prev - latest; // positive = dropped
+};
+
+// ══════════════════════════════════════════
+// SECTOR WEAKNESS DETECTOR
+// ══════════════════════════════════════════
+V9.exit.isSectorWeak = function(sec) {
+  var large   = V9.state.largeStocks;
+  if(!large.length) return false;
+  var secStks = large.filter(function(s){ return s.sec === sec; });
+  if(!secStks.length) return false;
+  var avg     = secStks.reduce(function(a,s){ return a+s.chg; },0) / secStks.length;
+  // Store snap for trend detection
+  var snap    = V9.state.exitEngine.secSnap;
+  if(!snap[sec]) snap[sec] = [];
+  snap[sec].push(avg);
+  if(snap[sec].length > 2) snap[sec] = snap[sec].slice(-2);
+  // Weak = avg negative AND falling
+  var falling = snap[sec].length >= 2 && snap[sec][1] < snap[sec][0];
+  return avg < -0.3 && falling;
+};
+
+// ══════════════════════════════════════════
+// OPPOSITE CANDLE DETECTOR
+// High volume + opposite direction candle
+// ══════════════════════════════════════════
+V9.exit.isOppCandle = function(stock, posSig) {
+  var s        = stock;
+  var isBuy    = (posSig === 'BUY' || posSig === 'ORB_BUY');
+  // Opposite = falling candle on BUY position
+  var oppDir   = isBuy ? s.chg < -1.0 : s.chg > 1.0;
+  var highVol  = s.volX >= 1.8;
+  // High wick in opposite direction
+  var totalRng = s.high - s.low;
+  var wickRatio= totalRng > 0 ? Math.abs(s.chg) / (totalRng/s.price*100) : 0;
+  return oppDir && highVol && wickRatio > 0.5;
+};
+
+// ══════════════════════════════════════════
+// VWAP BREAK DETECTOR
+// Price drops below VWAP with volume
+// ══════════════════════════════════════════
+V9.exit.isVWAPBreak = function(stock, posSig) {
+  var s     = stock;
+  var vwap  = (s.high + s.low + s.price) / 3;
+  var isBuy = (posSig === 'BUY' || posSig === 'ORB_BUY');
+  if(isBuy)  return s.price < vwap && s.volX >= 1.5 && s.chg < 0;
+  return s.price > vwap && s.volX >= 1.5 && s.chg > 0;
+};
+
+// ══════════════════════════════════════════
+// TRAILING STOP ENGINE
+// Lock +1.5%, trail after +2.5%
+// ══════════════════════════════════════════
+V9.exit.updateTrailingStop = function(pos, currentPrice) {
+  var isBuy   = (pos.sig === 'BUY' || pos.sig === 'ORB_BUY');
+  var pnlPct  = isBuy ?
+    (currentPrice - pos.entryPrice) / pos.entryPrice * 100 :
+    (pos.entryPrice - currentPrice) / pos.entryPrice * 100;
+
+  pos.pnlPct  = pnlPct;
+
+  // Update peak
+  if(isBuy  && currentPrice > pos.peakPrice) pos.peakPrice = currentPrice;
+  if(!isBuy && currentPrice < pos.peakPrice) pos.peakPrice = currentPrice;
+
+  // Lock profit at +1.5%
+  if(pnlPct >= EXIT_LOCK_PCT && !pos.lockedAt) {
+    pos.lockedAt     = currentPrice;
+    pos.trailingStop = isBuy ?
+      pos.entryPrice * (1 + 0.003) :  // lock above entry
+      pos.entryPrice * (1 - 0.003);
+  }
+
+  // Trail after +2.5%
+  if(pnlPct >= EXIT_TRAIL_PCT) {
+    var newStop = isBuy ?
+      pos.peakPrice * (1 - EXIT_TRAIL_STEP/100) :
+      pos.peakPrice * (1 + EXIT_TRAIL_STEP/100);
+    if(isBuy  && (!pos.trailingStop || newStop > pos.trailingStop))
+      pos.trailingStop = newStop;
+    if(!isBuy && (!pos.trailingStop || newStop < pos.trailingStop))
+      pos.trailingStop = newStop;
+  }
+
+  // Check if trailing stop hit
+  if(pos.trailingStop) {
+    var stopHit = isBuy ?
+      currentPrice <= pos.trailingStop :
+      currentPrice >= pos.trailingStop;
+    if(stopHit) return {hit:true, reason:'TRAILING STOP HIT at ₹'+pos.trailingStop.toFixed(2)};
+  }
+
+  return {hit:false, pnlPct:pnlPct};
+};
+
+// ══════════════════════════════════════════
+// MAIN EXIT EVALUATOR
+// Runs on every scan for each position
+// Returns exit status + reason
+// ══════════════════════════════════════════
+V9.exit.evaluate = function(sym, stock, pos) {
+  var reasons  = [];
+  var severity = 'HOLD'; // HOLD / WEAKENING / EXIT
+
+  // Store SMS snap
+  V9.exit.storeSMSSnap(sym, stock.sms);
+  var smsDrop = V9.exit.getSMSDrop(sym);
+
+  // ── CONDITION 1: SMS DROP 10+ ──
+  if(smsDrop >= EXIT_SMS_DROP) {
+    reasons.push({
+      code:    'SMS_DROP',
+      label:   '📉 SMS dropped '+smsDrop.toFixed(0)+' pts',
+      sev:     'EXIT',
+      detail:  'From '+(stock.sms+smsDrop).toFixed(0)+' → '+stock.sms
+    });
+    severity = 'EXIT';
+  } else if(smsDrop >= 5) {
+    reasons.push({code:'SMS_WEAK', label:'⚠️ SMS weakening -'+smsDrop.toFixed(0), sev:'WEAKENING', detail:''});
+    if(severity === 'HOLD') severity = 'WEAKENING';
+  }
+
+  // ── CONDITION 2: VOLUME COLLAPSE ──
+  if(stock.volX < EXIT_VOL_MIN && stock.sms < 70) {
+    reasons.push({
+      code:   'VOL_DRY',
+      label:  '📉 Volume dried '+stock.volX.toFixed(1)+'x',
+      sev:    'EXIT',
+      detail: 'Below 1.0x — momentum gone'
+    });
+    severity = 'EXIT';
+  } else if(stock.volX < 1.3 && stock.sms < 65) {
+    reasons.push({code:'VOL_WEAK', label:'⚠️ Volume fading '+stock.volX.toFixed(1)+'x', sev:'WEAKENING', detail:''});
+    if(severity === 'HOLD') severity = 'WEAKENING';
+  }
+
+  // ── CONDITION 3: OPPOSITE CANDLE ──
+  if(V9.exit.isOppCandle(stock, pos.sig)) {
+    reasons.push({
+      code:   'OPP_CANDLE',
+      label:  '🕯️ Opposite candle '+stock.chg.toFixed(2)+'%',
+      sev:    'EXIT',
+      detail: 'Vol:'+stock.volX.toFixed(1)+'x with reversal candle'
+    });
+    severity = 'EXIT';
+  }
+
+  // ── CONDITION 4: SECTOR WEAKNESS ──
+  if(V9.exit.isSectorWeak(stock.sec)) {
+    reasons.push({
+      code:   'SEC_WEAK',
+      label:  '📊 Sector '+stock.sec+' turning weak',
+      sev:    'WEAKENING',
+      detail: 'Sector momentum falling'
+    });
+    if(severity === 'HOLD') severity = 'WEAKENING';
+  }
+
+  // ── CONDITION 5: VWAP BREAK ──
+  if(V9.exit.isVWAPBreak(stock, pos.sig)) {
+    reasons.push({
+      code:   'VWAP_BREAK',
+      label:  '💧 VWAP broken with volume',
+      sev:    'EXIT',
+      detail: 'Institutional selling detected'
+    });
+    severity = 'EXIT';
+  }
+
+  // ── TRAILING STOP ──
+  var trailResult = V9.exit.updateTrailingStop(pos, stock.price);
+  if(trailResult.hit) {
+    reasons.push({
+      code:   'TRAIL_STOP',
+      label:  '🛑 '+trailResult.reason,
+      sev:    'EXIT',
+      detail: 'Profit protected'
+    });
+    severity = 'EXIT';
+  }
+
+  // ── TIME-BASED EXIT: 3:10 PM ──
+  var now  = new Date(), mins = now.getHours()*60+now.getMinutes();
+  if(mins >= EXIT_FORCE_MINS) {
+    reasons.push({
+      code:   'TIME_EXIT',
+      label:  '⏰ 3:10 PM — Force exit time',
+      sev:    'EXIT',
+      detail: 'EOD rule — no overnight risk'
+    });
+    severity = 'EXIT';
+  } else if(mins >= EXIT_WARN_MINS) {
+    reasons.push({code:'TIME_WARN', label:'⏰ 3:00 PM — Prepare to exit', sev:'WEAKENING', detail:''});
+    if(severity === 'HOLD') severity = 'WEAKENING';
+  }
+
+  return {
+    severity: severity,
+    reasons:  reasons,
+    smsDrop:  smsDrop,
+    pnlPct:   pos.pnlPct || 0,
+    trailingStop: pos.trailingStop
+  };
+};
+
+// ══════════════════════════════════════════
+// PROCESS ALL POSITIONS
+// Called after every scan rebuild
+// ══════════════════════════════════════════
+V9.exit.processAll = function() {
+  var st  = V9.state;
+  var ee  = st.exitEngine;
+  var all = st.allStocks;
+  var pos = ee.positions;
+
+  Object.keys(pos).forEach(function(sym) {
+    var p     = pos[sym];
+    var stock = all.find(function(x){ return x.sym === sym; });
+    if(!stock) return;
+
+    var result = V9.exit.evaluate(sym, stock, p);
+    p.status   = result.severity;
+    p.exitResult = result;
+
+    // Fire alert if status changed
+    var topReason = result.reasons[0];
+    if(!topReason) return;
+
+    var alertKey = sym+'_'+topReason.code;
+    var lastFired = p.alertFired[alertKey];
+    var cooldown  = result.severity==='EXIT' ? 60000 : 300000; // 1min for EXIT, 5min for WARN
+
+    if(!lastFired || (Date.now()-lastFired) > cooldown) {
+      p.alertFired[alertKey] = Date.now();
+
+      // Toast
+      var cls = result.severity==='EXIT' ? 'toast-sell' : 'toast-warn';
+      var icon = result.severity==='EXIT' ? '🔴' : '⚠️';
+      V9.ui.showToast(
+        icon+' '+result.severity+' — '+sym+' | P&L: '+(p.pnlPct>=0?'+':'')+p.pnlPct.toFixed(2)+'%',
+        topReason.label+(topReason.detail?' · '+topReason.detail:''),
+        cls
+      );
+
+      // Sound
+      if(result.severity === 'EXIT') {
+        V9.ui.playBeep(440,'sine',0.6);
+        V9.ui.haptic('alert');
+      } else {
+        V9.ui.haptic('medium');
+      }
+
+      // Log exit reason
+      V9.exit.logReason(sym, stock.price, p, topReason, result);
+
+      // Telegram alert (real trade mode)
+      V9.exit.sendExitAlert(sym, stock, p, result, topReason);
+
+      // Push notification
+      if('Notification' in window && Notification.permission==='granted') {
+        try {
+          new Notification(icon+' EXIT ALERT — '+sym,{
+            body: topReason.label+' | P&L: '+(p.pnlPct>=0?'+':'')+p.pnlPct.toFixed(2)+'%',
+            tag:  sym+'_exit'
+          });
+        }catch(e){}
+      }
+    }
+  });
+
+  // Render updated positions
+  V9.exit.renderPositions();
+  V9.exit.updateStockCardStatus();
+};
+
+// ══════════════════════════════════════════
+// EXIT REASON LOGGER
+// ══════════════════════════════════════════
+V9.exit.logReason = function(sym, price, pos, reason, result) {
+  var st  = V9.state;
+  var log = st.exitEngine.exitLog;
+  var isBuy = (pos.sig==='BUY'||pos.sig==='ORB_BUY');
+  var pnlEst = isBuy ?
+    (price-pos.entryPrice)/pos.entryPrice*100 :
+    (pos.entryPrice-price)/pos.entryPrice*100;
+
+  log.unshift({
+    sym:      sym,
+    code:     reason.code,
+    label:    reason.label,
+    detail:   reason.detail,
+    price:    price,
+    entry:    pos.entryPrice,
+    pnlPct:   pnlEst.toFixed(2),
+    severity: result.severity,
+    time:     pad(new Date().getHours())+':'+pad(new Date().getMinutes()),
+    ts:       Date.now()
+  });
+
+  if(log.length > 50) log = log.slice(0,50);
+  st.exitEngine.exitLog = log;
+
+  try{ localStorage.setItem('v9_exit_log', JSON.stringify(log)); }catch(e){}
+};
+
+// ══════════════════════════════════════════
+// TELEGRAM EXIT ALERT (real trade mode)
+// ══════════════════════════════════════════
+V9.exit.sendExitAlert = function(sym, stock, pos, result, topReason) {
+  var isBuy   = (pos.sig==='BUY'||pos.sig==='ORB_BUY');
+  var pnlPct  = pos.pnlPct || 0;
+  var isProfit= pnlPct >= 0;
+  var icon    = result.severity==='EXIT' ? '🔴' : '⚠️';
+  V9.alerts.tgFetch(
+    'action=exit_signal_v9'+
+    '&sym='+encodeURIComponent(sym)+
+    '&severity='+encodeURIComponent(result.severity)+
+    '&reason='+encodeURIComponent(topReason.label)+
+    '&detail='+encodeURIComponent(topReason.detail||'')+
+    '&price='+encodeURIComponent(stock.price.toLocaleString('en-IN'))+
+    '&entry='+encodeURIComponent(pos.entryPrice.toFixed(2))+
+    '&pnl_pct='+encodeURIComponent(pnlPct.toFixed(2))+
+    '&sms='+encodeURIComponent(stock.sms)+
+    '&volx='+encodeURIComponent(stock.volX.toFixed(1))+
+    '&sig='+encodeURIComponent(pos.sig)+
+    '&trail='+encodeURIComponent(pos.trailingStop?pos.trailingStop.toFixed(2):'')+
+    '&time='+encodeURIComponent(pad(new Date().getHours())+':'+pad(new Date().getMinutes()))
+  );
+};
+
+// ══════════════════════════════════════════
+// EXIT STATUS ON STOCK CARDS
+// Called after processing — updates card status
+// ══════════════════════════════════════════
+V9.exit.getCardStatus = function(sym) {
+  var ee  = V9.state.exitEngine;
+  var pos = ee.positions[sym];
+  if(!pos) return null;
+
+  var cfg = {
+    HOLD:      {emoji:'🟢', label:'HOLD',       color:'var(--green)', bg:'rgba(0,217,126,.08)',  border:'rgba(0,217,126,.25)'},
+    WEAKENING: {emoji:'⚠️', label:'WEAKENING',  color:'var(--amber)', bg:'rgba(255,176,32,.08)', border:'rgba(255,176,32,.25)'},
+    EXIT:      {emoji:'🔴', label:'EXIT NOW',    color:'var(--red)',   bg:'rgba(255,69,96,.1)',   border:'rgba(255,69,96,.35)'}
+  };
+
+  var c       = cfg[pos.status] || cfg.HOLD;
+  var result  = pos.exitResult || {reasons:[]};
+  var pnlStr  = (pos.pnlPct>=0?'+':'')+pos.pnlPct.toFixed(2)+'%';
+  var pnlCol  = pos.pnlPct>=0 ? 'var(--green)' : 'var(--red)';
+
+  return {
+    html: '<div style="background:'+c.bg+';border:1px solid '+c.border+';border-radius:var(--r3);padding:7px 9px;margin-top:6px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center">'+
+      '<div style="font-family:\'JetBrains Mono\';font-size:.38rem;font-weight:600;color:'+c.color+'">'+c.emoji+' '+c.label+'</div>'+
+      '<div style="text-align:right">'+
+      '<div style="font-family:\'JetBrains Mono\';font-size:.36rem;font-weight:600;color:'+pnlCol+'">'+pnlStr+'</div>'+
+      (pos.trailingStop?'<div style="font-family:\'JetBrains Mono\';font-size:.26rem;color:var(--text3)">Trail SL: ₹'+pos.trailingStop.toFixed(2)+'</div>':'')+
+      '</div></div>'+
+      (result.reasons.length?
+        '<div style="margin-top:4px">'+
+        result.reasons.slice(0,2).map(function(r){
+          return '<div style="font-family:\'JetBrains Mono\';font-size:.28rem;color:'+(r.sev==='EXIT'?'var(--red)':r.sev==='WEAKENING'?'var(--amber)':'var(--green)')+';margin-top:2px">'+r.label+'</div>';
+        }).join('')+
+        '</div>':'') +
+      '</div>',
+    status: pos.status,
+    config: c
+  };
+};
+
+// Inject exit status into rendered stock cards
+V9.exit.updateStockCardStatus = function() {
+  // Re-render intraday list to reflect exit status
+  if(V9.state.activeTab === 'intraday') V9.ui.renderIntraday();
+};
+
+// ══════════════════════════════════════════
+// HOOK INTO SCAN PIPELINE
+// ══════════════════════════════════════════
+var _origRebuildExit = V9.data.rebuildAllStocks;
+V9.data.rebuildAllStocks = function() {
+  _origRebuildExit.call(this);
+  try { V9.exit.processAll(); } catch(e){ console.warn('Exit engine error:', e); }
+};
+
+// ══════════════════════════════════════════
+// 3:10 PM FORCE EXIT — hooks into minute tick
+// ══════════════════════════════════════════
+var _origMinTick = V9.ui.onMinuteTick;
+V9.ui.onMinuteTick = function(h, m, mins) {
+  _origMinTick.call(this, h, m, mins);
+  var n = new Date();
+  var ee = V9.state.exitEngine;
+
+  // 3:00 PM warning
+  if(h===15 && m===0 && !ee.warnFired) {
+    ee.warnFired = true;
+    var openCount = Object.keys(ee.positions).length;
+    if(openCount > 0) {
+      V9.ui.showToast(
+        '⏰ 3:00 PM — Prepare to exit',
+        'You have '+openCount+' position'+(openCount>1?'s':'')+' open — exit by 3:10 PM',
+        'toast-warn'
+      );
+      V9.alerts.tgFetch(
+        'action=exit_warning_v9'+
+        '&count='+openCount+
+        '&time=15:00'+
+        '&positions='+encodeURIComponent(Object.keys(ee.positions).join(', '))
+      );
+    }
+  }
+
+  // 3:10 PM force exit alert
+  if(h===15 && m===10 && !ee.forceExitFired) {
+    ee.forceExitFired = true;
+    var positions = Object.keys(ee.positions);
+    if(positions.length > 0) {
+      V9.ui.showToast(
+        '🔴 3:10 PM — EXIT ALL POSITIONS NOW',
+        'Force exit: '+positions.join(', ')+' — close manually on Zerodha',
+        'toast-sell'
+      );
+      V9.ui.playBeep(660,'sine',1.0);
+      V9.ui.haptic('alert');
+      V9.alerts.tgFetch(
+        'action=force_exit_v9'+
+        '&count='+positions.length+
+        '&positions='+encodeURIComponent(positions.join(', '))+
+        '&time=15:10'
+      );
+    }
+  }
+
+  // Reset at midnight
+  if(h===0 && m===0) {
+    ee.forceExitFired = false;
+    ee.warnFired      = false;
+  }
+};
+
+// ══════════════════════════════════════════
+// ENHANCE STOCK CARD — add exit status
+// ══════════════════════════════════════════
+var _origBuildCardExit = V9.ui.buildStockCard;
+V9.ui.buildStockCard = function(s) {
+  var html      = _origBuildCardExit.call(this, s);
+  var exitStatus= V9.exit.getCardStatus(s.sym);
+
+  if(exitStatus) {
+    // Insert exit status block before closing card div
+    html = html.replace(
+      '</div>; // end card',
+      exitStatus.html + '</div>'
+    );
+    // Fallback
+    if(html.indexOf(exitStatus.html) === -1) {
+      html = html.slice(0, -6) + exitStatus.html + html.slice(-6);
+    }
+  }
+  return html;
+};
+
+// ══════════════════════════════════════════
+// EXIT POSITIONS PANEL
+// Shows in MORE screen
+// ══════════════════════════════════════════
+V9.exit.renderPositions = function() {
+  var el = document.getElementById('exitPositionsPanel'); if(!el) return;
+  var ee = V9.state.exitEngine;
+  var pos= ee.positions;
+  var keys = Object.keys(pos);
+
+  if(!keys.length) {
+    el.innerHTML = '<div class="empty">No positions being monitored<br><span style="font-size:.85em;opacity:.6">Add positions to track exit signals</span></div>';
+    return;
+  }
+
+  el.innerHTML = keys.map(function(sym) {
+    var p      = pos[sym];
+    var status = V9.exit.getCardStatus(sym);
+    var cfg    = status ? status.config : {emoji:'🟢',label:'HOLD',color:'var(--green)'};
+    return '<div style="background:var(--card2);border:1px solid var(--border);border-radius:var(--r2);padding:10px 12px;margin-bottom:6px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'+
+      '<div>'+
+      '<div style="font-family:\'Outfit\';font-weight:700;font-size:.82rem">'+sym+'</div>'+
+      '<div style="font-family:\'JetBrains Mono\';font-size:.3rem;color:var(--text3)">'+p.sig+' @ ₹'+p.entryPrice.toFixed(2)+' · '+p.entryTime+'</div>'+
+      '</div>'+
+      '<div style="font-family:\'JetBrains Mono\';font-size:.38rem;font-weight:600;color:'+cfg.color+'">'+cfg.emoji+' '+cfg.label+'</div>'+
+      '</div>'+
+      (status ? status.html : '')+
+      '<button onclick="V9.exit.removePosition(\''+sym+'\')" style="margin-top:6px;width:100%;padding:6px;background:var(--redl);border:1px solid rgba(255,69,96,.2);border-radius:var(--r3);color:var(--red);font-family:\'JetBrains Mono\';font-size:.34rem;cursor:pointer">✕ Remove from monitor</button>'+
+      '</div>';
+  }).join('');
+};
+
+// ══════════════════════════════════════════
+// EXIT LOG RENDERER
+// ══════════════════════════════════════════
+V9.exit.renderLog = function() {
+  var el  = document.getElementById('exitLogPanel'); if(!el) return;
+  var log = V9.state.exitEngine.exitLog;
+  if(!log.length) {
+    el.innerHTML='<div class="empty">No exit signals fired yet</div>';
+    return;
+  }
+  // Pattern analysis
+  var codeCounts = {};
+  log.forEach(function(l){ codeCounts[l.code]=(codeCounts[l.code]||0)+1; });
+  var topCode = Object.keys(codeCounts).sort(function(a,b){return codeCounts[b]-codeCounts[a];})[0];
+
+  var patternMap = {
+    SMS_DROP:   'SMS dropping most often',
+    VOL_DRY:    'Volume drying most often',
+    OPP_CANDLE: 'Reversal candles most often',
+    SEC_WEAK:   'Sector weakness most often',
+    VWAP_BREAK: 'VWAP breaks most often',
+    TRAIL_STOP: 'Trailing stop hit most often',
+    TIME_EXIT:  'Time-based exits most often'
+  };
+
+  el.innerHTML =
+    // Pattern insight
+    '<div style="background:var(--goldl);border:1px solid rgba(245,166,35,.2);border-radius:var(--r3);padding:8px 10px;margin-bottom:8px">'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.32rem;color:var(--gold)">💡 YOUR PATTERN</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.36rem;color:var(--text);margin-top:3px">'+
+    (patternMap[topCode]||'Analyzing patterns…')+' ('+( codeCounts[topCode]||0)+' times)'+
+    '</div>'+
+    '</div>'+
+    // Log entries
+    log.slice(0,20).map(function(l){
+      var col = l.severity==='EXIT'?'var(--red)':l.severity==='WEAKENING'?'var(--amber)':'var(--green)';
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04)">'+
+        '<div>'+
+        '<div style="font-family:\'Outfit\';font-weight:700;font-size:.72rem">'+l.sym+'</div>'+
+        '<div style="font-family:\'JetBrains Mono\';font-size:.3rem;color:var(--text3);margin-top:1px">'+l.label+'</div>'+
+        (l.detail?'<div style="font-family:\'JetBrains Mono\';font-size:.26rem;color:var(--text3)">'+l.detail+'</div>':'')+
+        '</div>'+
+        '<div style="text-align:right">'+
+        '<div style="font-family:\'JetBrains Mono\';font-size:.36rem;color:'+col+'">'+l.severity+'</div>'+
+        '<div style="font-family:\'JetBrains Mono\';font-size:.34rem;color:'+(parseFloat(l.pnlPct)>=0?'var(--green)':'var(--red)')+'">P&L: '+(parseFloat(l.pnlPct)>=0?'+':'')+l.pnlPct+'%</div>'+
+        '<div style="font-family:\'JetBrains Mono\';font-size:.26rem;color:var(--text3)">'+l.time+'</div>'+
+        '</div></div>';
+    }).join('');
+};
+
+// ══════════════════════════════════════════
+// INJECT EXIT MONITOR SCREEN INTO DOM
+// ══════════════════════════════════════════
+(function injectExitScreen() {
+  var mc = document.getElementById('mainContent'); if(!mc) return;
+
+  var scrDiv = document.createElement('div');
+  scrDiv.className = 'screen';
+  scrDiv.id = 'scrExitmonitor';
+  scrDiv.innerHTML =
+    '<div class="screen-inner">'+
+
+    // Header
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'+
+    '<div>'+
+    '<div style="font-family:\'Outfit\';font-weight:700;font-size:.95rem">🔴 EXIT MONITOR</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.3rem;color:var(--text3);margin-top:1px">Real trade exit intelligence</div>'+
+    '</div>'+
+    '</div>'+
+
+    // Add position form
+    '<div class="card">'+
+    '<div class="card-title">➕ ADD POSITION TO MONITOR</div>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:6px">'+
+    '<input class="jnl-input" id="exitSym"   placeholder="Symbol e.g. RELIANCE" style="text-transform:uppercase">'+
+    '<input class="jnl-input" id="exitEntry" type="number" placeholder="Entry price">'+
+    '</div>'+
+    '<div style="display:flex;gap:5px">'+
+    '<button onclick="V9.exit.addFromForm()" class="sim-btn p" style="flex:1">📍 MONITOR</button>'+
+    '<select id="exitSig" class="jnl-input" style="flex:0 0 90px">'+
+    '<option value="BUY">BUY</option><option value="SELL">SELL</option>'+
+    '</select>'+
+    '</div>'+
+    '<div class="cmsg" id="exitMsg" style="display:none;margin-top:5px"></div>'+
+    '</div>'+
+
+    // Active positions
+    '<div class="card">'+
+    '<div class="card-title">📍 MONITORED POSITIONS</div>'+
+    '<div id="exitPositionsPanel"><div class="empty">No positions yet</div></div>'+
+    '</div>'+
+
+    // Exit log
+    '<div class="card">'+
+    '<div class="card-title">📋 EXIT LOG <span class="card-sub">Your pattern analysis</span></div>'+
+    '<div id="exitLogPanel"><div class="empty">No exits logged yet</div></div>'+
+    '</div>'+
+
+    '</div>';
+
+  mc.appendChild(scrDiv);
+
+  // Add to MORE screen
+  var moreItems = document.querySelector('#scrMore .screen-inner .card');
+  if(moreItems) {
+    var newItem = document.createElement('div');
+    newItem.className = 'more-item';
+    newItem.setAttribute('onclick', "V9.ui.goS('exitmonitor');V9.exit.renderPositions();V9.exit.renderLog()");
+    newItem.innerHTML =
+      '<div class="more-ico">🔴</div>'+
+      '<div class="more-txt">'+
+      '<div class="more-title">Exit Monitor</div>'+
+      '<div class="more-desc">Real trade exit signals + pattern log</div>'+
+      '</div>'+
+      '<div class="more-arr">›</div>';
+    moreItems.appendChild(newItem);
+  }
+
+  console.log('NSE PRO V9 — Exit Monitor injected');
+})();
+
+// ── FORM HELPER ──
+V9.exit.addFromForm = function() {
+  var sym   = ((document.getElementById('exitSym')||{}).value||'').toUpperCase().trim();
+  var entry = parseFloat((document.getElementById('exitEntry')||{}).value||0);
+  var sig   = (document.getElementById('exitSig')||{}).value || 'BUY';
+  var msg   = document.getElementById('exitMsg');
+
+  if(!sym || !entry) {
+    if(msg){ msg.textContent='Enter symbol and entry price'; msg.className='cmsg cmsg-err'; msg.style.display='block'; setTimeout(function(){msg.style.display='none';},2000); }
+    return;
+  }
+  V9.exit.addPosition(sym, entry, sig);
+  document.getElementById('exitSym').value   = '';
+  document.getElementById('exitEntry').value = '';
+  if(msg){ msg.textContent='✓ Monitoring '+sym; msg.className='cmsg cmsg-ok'; msg.style.display='block'; setTimeout(function(){msg.style.display='none';},2000); }
+  V9.ui.haptic('success');
+};
+
+// ── LOAD SAVED POSITIONS ──
+V9.exit.loadSaved = function() {
+  try {
+    var saved = JSON.parse(localStorage.getItem('v9_exit_pos')||'{}');
+    if(Object.keys(saved).length) V9.state.exitEngine.positions = saved;
+    var log = JSON.parse(localStorage.getItem('v9_exit_log')||'[]');
+    if(log.length) V9.state.exitEngine.exitLog = log;
+  }catch(e){}
+};
+V9.exit.loadSaved();
+
+// ══════════════════════════════════════════
+// CLOUDFLARE WORKER HANDLER (add to Worker)
+// Add this action to cloudflare-worker-v9.js:
+//
+// if(action==='exit_signal_v9') {
+//   const sym=p.get('sym'), sev=p.get('severity');
+//   const reason=p.get('reason'), detail=p.get('detail');
+//   const price=p.get('price'), entry=p.get('entry');
+//   const pnl=p.get('pnl_pct'), sms=p.get('sms');
+//   const volx=p.get('volx'), trail=p.get('trail'), time=p.get('time');
+//   const isExit=sev==='EXIT', pnlN=parseFloat(pnl);
+//   await tg(
+//     (isExit?'🔴':'⚠️')+' <b>'+sev+' SIGNAL — '+sym+'</b>\n\n'+
+//     '📍 <b>'+reason+'</b>\n'+(detail?detail+'\n':'')+'\n'+
+//     '💵 Current: ₹'+price+' | Entry: ₹'+entry+'\n'+
+//     'P&L Est: <b>'+(pnlN>=0?'+':'')+pnl+'%</b>\n'+
+//     'SMS: '+sms+' | Vol: '+volx+'x\n'+
+//     (trail?'🛑 Trail SL: ₹'+trail+'\n':'')+'\n'+
+//     (isExit?'⚡ <b>CLOSE ON ZERODHA NOW</b>':'💡 Watch closely')+
+//     '\n⏰ '+time+' | 🤖 NSE PRO V9'
+//   );
+//   return jr({status:'ok'});
+// }
+//
+// if(action==='exit_warning_v9') {
+//   const count=p.get('count'), positions=p.get('positions'), time=p.get('time');
+//   await tg('⏰ <b>3:00 PM WARNING — V9</b>\n\n'+count+' open: '+positions+'\n\n⚡ Exit by 3:10 PM\n🤖 V9');
+//   return jr({status:'ok'});
+// }
+//
+// if(action==='force_exit_v9') {
+//   const count=p.get('count'), positions=p.get('positions');
+//   await tg('🚨 <b>3:10 PM — EXIT NOW</b>\n\n⚡ CLOSE ON ZERODHA:\n'+positions.split(', ').map(s=>'  📍 '+s).join('\n')+'\n\n⛔ No more trades today\n🤖 NSE PRO V9');
+//   return jr({status:'ok'});
+// }
+// ══════════════════════════════════════════
+
+// ══════════════════════════════════════════
+// NSE PRO V9 — PATCH 2A END
+// PASTE PATCH 2B (Day Quality) BELOW
+// OR PASTE PART 8 IF DONE
+// ══════════════════════════════════════════
 // ═══════════════════════════════════════════
 // NSE PRO V9 BETA — PART 8 (FINAL)
 // Boot Sequence + V9.init + Closing Tags
