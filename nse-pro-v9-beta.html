@@ -6667,7 +6667,7 @@ V9.sms.getFocusStocks = function() {
 // NSE PRO V9 — PATCH 1 (Version 3) END
 // PASTE PART 8 DIRECTLY BELOW THIS LINE
 // ══════════════════════════════════════════
-   // ═══════════════════════════════════════════
+// ═══════════════════════════════════════════
 // NSE PRO V9 — PATCH 2A
 // Smart Exit Engine
 //
@@ -7328,7 +7328,9 @@ V9.exit.renderLog = function() {
 // INJECT EXIT MONITOR SCREEN INTO DOM
 // ══════════════════════════════════════════
 (function injectExitScreen() {
-  var mc = document.getElementById('mainContent'); if(!mc) return;
+  // Wait for DOM to be fully ready
+  function doInject() {
+    var mc = document.getElementById('mainContent'); if(!mc) return;
 
   var scrDiv = document.createElement('div');
   scrDiv.className = 'screen';
@@ -7393,6 +7395,15 @@ V9.exit.renderLog = function() {
   }
 
   console.log('NSE PRO V9 — Exit Monitor injected');
+  } // end doInject
+
+  // Run after DOM ready
+  if(document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', doInject);
+  } else {
+    // DOM already ready — slight delay to ensure all parts loaded
+    setTimeout(doInject, 100);
+  }
 })();
 
 // ── FORM HELPER ──
@@ -7411,6 +7422,37 @@ V9.exit.addFromForm = function() {
   document.getElementById('exitEntry').value = '';
   if(msg){ msg.textContent='✓ Monitoring '+sym; msg.className='cmsg cmsg-ok'; msg.style.display='block'; setTimeout(function(){msg.style.display='none';},2000); }
   V9.ui.haptic('success');
+};
+
+// ── EXTEND goTab to include exitmonitor in screen hiding ──
+var _origGoTabExit = V9.ui.goTab;
+V9.ui.goTab = function(t) {
+  // First hide exitmonitor screen if switching tabs
+  var em = document.getElementById('scrExitmonitor');
+  if(em) em.className = 'screen';
+  _origGoTabExit.call(this, t);
+};
+
+// ── PATCH goS to handle exitmonitor ──
+var _origGoSExit = V9.ui.goS;
+V9.ui.goS = function(s) {
+  // Handle exitmonitor separately
+  if(s === 'exitmonitor') {
+    // Hide all screens
+    document.querySelectorAll('.screen').forEach(function(el){
+      el.className = 'screen';
+    });
+    var target = document.getElementById('scrExitmonitor');
+    if(target) {
+      target.className = 'screen on';
+      V9.exit.renderPositions();
+      V9.exit.renderLog();
+    }
+    var mc = document.getElementById('mainContent');
+    if(mc) mc.scrollTop = 0;
+    return;
+  }
+  _origGoSExit.call(this, s);
 };
 
 // ── LOAD SAVED POSITIONS ──
