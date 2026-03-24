@@ -7508,6 +7508,693 @@ V9.exit.loadSaved();
 // PASTE PATCH 2B (Day Quality) BELOW
 // OR PASTE PART 8 IF DONE
 // ══════════════════════════════════════════
+   // ═══════════════════════════════════════════
+// NSE PRO V9 — PATCH 2B
+// Day Quality Score (0-100)
+// + Complete Alert System Updates
+//
+// Features:
+//   Day Quality Score — 5 factors
+//   Time priority windows
+//   Move filter + LATE detection
+//   Re-entry pullback logic (30-50%)
+//   CONFIRM position check
+//   WATCH ALERT toggle (optional)
+//   Telegram updates
+//
+// Paste AFTER Patch 2A, BEFORE Part 8
+// ═══════════════════════════════════════════
+
+// ══════════════════════════════════════════
+// PATCH 2B STATE
+// ══════════════════════════════════════════
+V9.state.dayQuality = V9.state.dayQuality || {
+  score:     0,
+  grade:     'UNKNOWN',
+  factors:   {},
+  maxTrades: 3,
+  mode:      'UNKNOWN',  // NO_TRADE/LOW_RISK/NORMAL/PRIME
+  lastCalc:  0,
+  sent900:   false,
+  sent920:   false
+};
+
+V9.state.alertSettings = V9.state.alertSettings || {
+  watchAlertEnabled: false
+};
+
+V9.state.lateStocks    = V9.state.lateStocks    || {};
+V9.state.pullbackWatch = V9.state.pullbackWatch  || {};
+
+// ══════════════════════════════════════════
+// DAY QUALITY ENGINE — V9.dq
+// ══════════════════════════════════════════
+V9.dq = V9.dq || {};
+
+// ── FACTOR 1: NIFTY GAP (20 pts) ──
+V9.dq.calcGap = function() {
+  var el = document.getElementById('ic0');
+  if(!el || el.textContent === '—') return {score:10, label:'—', detail:'Waiting for data'};
+  var chg = parseFloat(el.textContent.replace('%','').replace('+','')) || 0;
+  var score, label;
+  if(chg >= 1.0)       { score=20; label='Gap UP +'+chg.toFixed(1)+'% ✅'; }
+  else if(chg >= 0.5)  { score=16; label='Gap UP +'+chg.toFixed(1)+'% ✅'; }
+  else if(chg >= 0.0)  { score=10; label='Flat '+chg.toFixed(1)+'%'; }
+  else if(chg >= -0.5) { score=5;  label='Gap DOWN '+chg.toFixed(1)+'%'; }
+  else                 { score=0;  label='Gap DOWN '+chg.toFixed(1)+'% ❌'; }
+  return {score:score, label:label, detail:'Nifty gap strength', chg:chg};
+};
+
+// ── FACTOR 2: MARKET BREADTH (25 pts) ──
+V9.dq.calcBreadth = function() {
+  var st  = V9.state;
+  var adv = st.adv || 0;
+  var dec = st.dec || 0;
+  if(!adv && !dec) return {score:12, label:'—', detail:'Waiting for data'};
+  var ratio = dec > 0 ? adv/dec : 2;
+  var score, label;
+  if(ratio >= 2.0)      { score=25; label='A/D '+adv+'/'+dec+' ('+ratio.toFixed(1)+'x) ✅'; }
+  else if(ratio >= 1.5) { score=18; label='A/D '+adv+'/'+dec+' ('+ratio.toFixed(1)+'x) ✅'; }
+  else if(ratio >= 1.0) { score=12; label='A/D '+adv+'/'+dec+' balanced'; }
+  else if(ratio >= 0.7) { score=5;  label='A/D '+adv+'/'+dec+' weak'; }
+  else                  { score=0;  label='A/D '+adv+'/'+dec+' ❌ bearish'; }
+  return {score:score, label:label, detail:'Advance/Decline ratio', ratio:ratio};
+};
+
+// ── FACTOR 3: SECTOR ALIGNMENT (20 pts) ──
+V9.dq.calcSectors = function() {
+  var large = V9.state.largeStocks;
+  if(!large.length) return {score:10, label:'—', detail:'Waiting for data'};
+  var posCount = 0;
+  var secs = {};
+  large.forEach(function(s){
+    if(!secs[s.sec]) secs[s.sec] = [];
+    secs[s.sec].push(s.chg);
+  });
+  Object.keys(secs).forEach(function(sec){
+    var avg = secs[sec].reduce(function(a,v){return a+v;},0)/secs[sec].length;
+    if(avg > 0.2) posCount++;
+  });
+  var score, label;
+  if(posCount >= 5)      { score=20; label:posCount+' sectors positive ✅'; label=posCount+' sectors positive ✅'; }
+  else if(posCount >= 4) { score=16; label=posCount+' sectors positive ✅'; }
+  else if(posCount >= 3) { score=10; label=posCount+' sectors positive'; }
+  else if(posCount >= 2) { score=5;  label=posCount+' sectors positive'; }
+  else                   { score=0;  label=posCount+' sectors positive ❌'; }
+  return {score:score, label:label, detail:'Positive sectors count', posCount:posCount};
+};
+
+// ── FACTOR 4: VOLATILITY (20 pts) ──
+V9.dq.calcVolatility = function() {
+  var all = V9.state.allStocks;
+  if(!all.length) return {score:12, label:'—', detail:'Waiting for data'};
+  var avgAbs = all.reduce(function(a,s){return a+Math.abs(s.chg);},0)/all.length;
+  var score, label, level;
+  if(avgAbs <= 0.8)      { score=20; label='Low volatility ✅';     level='LOW'; }
+  else if(avgAbs <= 1.5) { score=14; label='Normal volatility';     level='NORMAL'; }
+  else if(avgAbs <= 2.5) { score=7;  label='High volatility ⚠️';    level='HIGH'; }
+  else                   { score=0;  label='Extreme volatility ❌';  level='EXTREME'; }
+  return {score:score, label:label, detail:'Avg move: '+avgAbs.toFixed(1)+'%', level:level, avgAbs:avgAbs};
+};
+
+// ── FACTOR 5: MOMENTUM QUALITY (15 pts) ──
+V9.dq.calcMomentum = function() {
+  var all = V9.state.allStocks;
+  if(!all.length) return {score:7, label:'—', detail:'Waiting for data'};
+  var sms75 = all.filter(function(s){return s.sms>=75;}).length;
+  var score, label;
+  if(sms75 >= 25)      { score=15; label=sms75+' stocks SMS≥75 ✅'; }
+  else if(sms75 >= 15) { score=10; label=sms75+' stocks SMS≥75 ✅'; }
+  else if(sms75 >= 8)  { score=5;  label=sms75+' stocks SMS≥75'; }
+  else                 { score=0;  label=sms75+' stocks SMS≥75 ❌'; }
+  return {score:score, label:label, detail:'High momentum stocks', count:sms75};
+};
+
+// ── MASTER CALCULATOR ──
+V9.dq.calculate = function() {
+  var f1 = V9.dq.calcGap();
+  var f2 = V9.dq.calcBreadth();
+  var f3 = V9.dq.calcSectors();
+  var f4 = V9.dq.calcVolatility();
+  var f5 = V9.dq.calcMomentum();
+
+  var total = f1.score + f2.score + f3.score + f4.score + f5.score;
+  total = Math.min(Math.max(Math.round(total), 0), 100);
+
+  var mode, grade, maxTrades, color, emoji;
+  if(total >= 85)      { mode='PRIME';    grade='💎 PRIME DAY';    maxTrades=3; color='var(--gold)';   emoji='💎'; }
+  else if(total >= 70) { mode='NORMAL';   grade='🟢 NORMAL DAY';   maxTrades=2; color='var(--green)';  emoji='🟢'; }
+  else if(total >= 50) { mode='LOW_RISK'; grade='🟡 LOW RISK DAY'; maxTrades=1; color='var(--amber)';  emoji='🟡'; }
+  else                 { mode='NO_TRADE'; grade='🔴 AVOID TRADING';maxTrades=0; color='var(--red)';    emoji='🔴'; }
+
+  var dq = V9.state.dayQuality;
+  dq.score     = total;
+  dq.grade     = grade;
+  dq.mode      = mode;
+  dq.maxTrades = maxTrades;
+  dq.color     = color;
+  dq.emoji     = emoji;
+  dq.factors   = {gap:f1, breadth:f2, sectors:f3, volatility:f4, momentum:f5};
+  dq.lastCalc  = Date.now();
+
+  // Override discipline max trades
+  V9.state.S.maxTrades = maxTrades || V9.state.S.maxTrades;
+
+  V9.dq.renderDash();
+  return dq;
+};
+
+// ══════════════════════════════════════════
+// DASH RENDER — Day Quality Card
+// ══════════════════════════════════════════
+V9.dq.renderDash = function() {
+  var el = document.getElementById('dqCard'); if(!el) return;
+  var dq = V9.state.dayQuality;
+  if(!dq.score) { el.innerHTML='<div class="empty">Calculating…</div>'; return; }
+
+  var pct  = dq.score;
+  var f    = dq.factors;
+  var barCol = dq.mode==='PRIME'?'var(--gold)':dq.mode==='NORMAL'?'var(--green)':dq.mode==='LOW_RISK'?'var(--amber)':'var(--red)';
+
+  el.innerHTML =
+    // Score display
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'+
+    '<div>'+
+    '<div style="font-family:\'Outfit\';font-weight:800;font-size:2.2rem;color:'+dq.color+';line-height:1">'+dq.score+'</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.3rem;color:var(--text3)">out of 100</div>'+
+    '</div>'+
+    '<div style="text-align:right">'+
+    '<div style="font-family:\'Outfit\';font-weight:700;font-size:.75rem;color:'+dq.color+'">'+dq.grade+'</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.32rem;color:var(--text2);margin-top:3px">Max trades: <b>'+dq.maxTrades+'</b></div>'+
+    '</div>'+
+    '</div>'+
+    // Score bar
+    '<div style="height:6px;background:var(--border);border-radius:6px;overflow:hidden;margin-bottom:10px">'+
+    '<div style="height:100%;width:'+pct+'%;background:'+barCol+';border-radius:6px;transition:width 1s ease"></div>'+
+    '</div>'+
+    // 5 factors
+    '<div style="display:flex;flex-direction:column;gap:4px">'+
+    [
+      {k:'gap',      icon:'📈', label:'Gap',        max:20},
+      {k:'breadth',  icon:'🌡️', label:'Breadth',    max:25},
+      {k:'sectors',  icon:'🏆', label:'Sectors',    max:20},
+      {k:'volatility',icon:'⚡',label:'Volatility', max:20},
+      {k:'momentum', icon:'🚀', label:'Momentum',   max:15}
+    ].map(function(item){
+      var fac = f[item.k] || {score:0, label:'—'};
+      var fpct= Math.min(fac.score/item.max*100,100);
+      var fcol= fac.score>=item.max*0.7?'var(--green)':fac.score>=item.max*0.4?'var(--amber)':'var(--red)';
+      return '<div style="display:flex;align-items:center;gap:6px">'+
+        '<div style="font-family:\'JetBrains Mono\';font-size:.28rem;width:64px;color:var(--text3);flex-shrink:0">'+item.icon+' '+item.label+'</div>'+
+        '<div style="flex:1;height:3px;background:var(--border);border-radius:3px;overflow:hidden">'+
+        '<div style="height:100%;width:'+fpct+'%;background:'+fcol+';border-radius:3px;transition:width .8s"></div>'+
+        '</div>'+
+        '<div style="font-family:\'JetBrains Mono\';font-size:.28rem;color:'+fcol+';width:28px;text-align:right;flex-shrink:0">'+fac.score+'/'+item.max+'</div>'+
+        '<div style="font-family:\'JetBrains Mono\';font-size:.26rem;color:var(--text3);flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">'+fac.label+'</div>'+
+        '</div>';
+    }).join('')+
+    '</div>'+
+    // Mode message
+    (dq.mode==='NO_TRADE'?
+      '<div style="background:var(--redl);border:1px solid rgba(255,69,96,.25);border-radius:var(--r3);padding:8px 10px;margin-top:8px;text-align:center">'+
+      '<div style="font-family:\'Outfit\';font-weight:700;font-size:.75rem;color:var(--red)">🔴 AVOID TRADING TODAY</div>'+
+      '<div style="font-family:\'JetBrains Mono\';font-size:.3rem;color:var(--text2);margin-top:2px">Market conditions poor — protect capital</div>'+
+      '</div>':
+      dq.mode==='LOW_RISK'?
+      '<div style="background:var(--amberl);border:1px solid rgba(255,176,32,.25);border-radius:var(--r3);padding:6px 10px;margin-top:8px">'+
+      '<div style="font-family:\'JetBrains Mono\';font-size:.32rem;color:var(--amber)">🟡 LOW RISK — 1 trade max | SMS ≥ 75 only | Half size</div>'+
+      '</div>':
+      dq.mode==='PRIME'?
+      '<div style="background:var(--goldl);border:1px solid rgba(245,166,35,.25);border-radius:var(--r3);padding:6px 10px;margin-top:8px">'+
+      '<div style="font-family:\'JetBrains Mono\';font-size:.32rem;color:var(--gold)">💎 PRIME DAY — All signals active | Full position size</div>'+
+      '</div>':'');
+};
+
+// ══════════════════════════════════════════
+// INJECT DQ CARD INTO DASH SCREEN
+// ══════════════════════════════════════════
+(function injectDQCard() {
+  function doInject() {
+    var scrDash = document.getElementById('scrDash'); if(!scrDash) return;
+    var inner   = scrDash.querySelector('.screen-inner'); if(!inner) return;
+
+    // Create DQ card
+    var dqDiv = document.createElement('div');
+    dqDiv.className = 'card';
+    dqDiv.id = 'dqCardWrap';
+    dqDiv.innerHTML =
+      '<div class="card-title">📊 DAY QUALITY SCORE <span class="card-sub" id="dqTime">—</span></div>'+
+      '<div id="dqCard"><div class="empty">Connect Zerodha to calculate score</div></div>';
+
+    // Insert at top — after login card
+    var loginCard = document.getElementById('loginCard');
+    if(loginCard && loginCard.parentNode === inner) {
+      inner.insertBefore(dqDiv, loginCard.nextSibling);
+    } else {
+      inner.insertBefore(dqDiv, inner.firstChild);
+    }
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', doInject);
+  else setTimeout(doInject, 150);
+})();
+
+// ══════════════════════════════════════════
+// TIME CONTEXT BAR
+// Shows current market phase below header
+// ══════════════════════════════════════════
+V9.dq.updateTimeBar = function() {
+  var el = document.getElementById('timeContextBar'); if(!el) return;
+  var n  = new Date(), h=n.getHours(), m=n.getMinutes(), mins=h*60+m;
+  var label, color, bg;
+
+  if(mins < 525)            { label='🌙 Pre-market · Scanner starts 8:45 AM';    color='var(--text3)';  bg='rgba(255,255,255,.02)'; }
+  else if(mins < 540)       { label='🌅 Pre-market scan · Preparing signals';     color='var(--purple)'; bg='rgba(168,85,247,.08)'; }
+  else if(mins < 555)       { label='⏰ Opening soon · High threshold active';     color='var(--amber)';  bg:'rgba(255,176,32,.08)';  bg='rgba(255,176,32,.08)'; }
+  else if(mins <= 570)      { label='⚡ OPENING RANGE · Best entry window';        color='var(--gold)';   bg='rgba(245,166,35,.1)'; }
+  else if(mins <= 630)      { label='⚡ HIGH PRIORITY · All EARLY alerts active';  color='var(--green)';  bg='rgba(0,217,126,.08)'; }
+  else if(mins <= 810)      { label='📊 MEDIUM PRIORITY · SMS ≥ 70 only';         color='var(--amber)';  bg='rgba(255,176,32,.06)'; }
+  else if(mins <= 900)      { label='⚠️ LOW PRIORITY · SMS ≥ 80 only';            color='var(--red)';    bg='rgba(255,69,96,.06)'; }
+  else if(mins <= 910)      { label='🔴 3:10 PM · Exit all positions now';         color='var(--red)';    bg='rgba(255,69,96,.15)'; }
+  else if(mins <= 930)      { label='🔒 MARKET CLOSING · No new entries';          color='var(--text3)';  bg='rgba(255,255,255,.02)'; }
+  else                      { label='🔒 MARKET CLOSED · Opens 8:45 AM tomorrow';   color='var(--text3)';  bg='rgba(255,255,255,.02)'; }
+
+  el.style.background  = bg;
+  el.style.color       = color;
+  el.style.borderBottom= '1px solid rgba(255,255,255,.04)';
+  el.textContent       = label;
+};
+
+// Inject time context bar
+(function injectTimeBar() {
+  function doInject() {
+    var hdr = document.querySelector('.hdr'); if(!hdr) return;
+    if(document.getElementById('timeContextBar')) return;
+    var bar = document.createElement('div');
+    bar.id  = 'timeContextBar';
+    bar.style.cssText = 'padding:4px 14px;font-family:"JetBrains Mono";font-size:.32rem;text-align:center;transition:all .3s;flex-shrink:0';
+    hdr.insertAdjacentElement('afterend', bar);
+    V9.dq.updateTimeBar();
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', doInject);
+  else setTimeout(doInject, 200);
+})();
+
+// Update time bar every minute
+var _origMinTickDQ = V9.ui.onMinuteTick;
+V9.ui.onMinuteTick = function(h, m, mins) {
+  _origMinTickDQ.call(this, h, m, mins);
+  var n = new Date();
+  V9.dq.updateTimeBar();
+
+  // Recalculate DQ score every 5 minutes during market hours
+  if(V9.data.isMarketHours() && m % 5 === 0) V9.dq.calculate();
+
+  // Send Telegram at 9:00 AM
+  var dq = V9.state.dayQuality;
+  if(h===9 && m===0 && V9.state.tok && !dq.sent900) {
+    dq.sent900 = true;
+    V9.dq.calculate();
+    V9.dq.sendTelegram('PRE-MARKET');
+  }
+  // Send Telegram at 9:20 AM (confirmed with real data)
+  if(h===9 && m===20 && V9.state.tok && !dq.sent920) {
+    dq.sent920 = true;
+    V9.dq.calculate();
+    V9.dq.sendTelegram('CONFIRMED');
+  }
+  // Reset flags at midnight
+  if(h===0 && m===0) { dq.sent900=false; dq.sent920=false; }
+
+  // Update DQ time label
+  var dt = document.getElementById('dqTime');
+  if(dt) dt.textContent = 'Updated '+pad(h)+':'+pad(m);
+};
+
+// ══════════════════════════════════════════
+// TELEGRAM — DAY QUALITY SCORE
+// ══════════════════════════════════════════
+V9.dq.sendTelegram = function(type) {
+  var dq  = V9.state.dayQuality;
+  var f   = dq.factors;
+  var all = V9.state.allStocks;
+  var top3= all.filter(function(s){return s.sms>=60&&!s.blockAlert;})
+    .sort(function(a,b){return (b.priority||0)-(a.priority||0);}).slice(0,3);
+
+  V9.alerts.tgFetch(
+    'action=day_quality_v9'+
+    '&type='+encodeURIComponent(type)+
+    '&score='+dq.score+
+    '&grade='+encodeURIComponent(dq.grade)+
+    '&max_trades='+dq.maxTrades+
+    '&gap='+encodeURIComponent(f.gap?f.gap.label:'—')+
+    '&breadth='+encodeURIComponent(f.breadth?f.breadth.label:'—')+
+    '&sectors='+encodeURIComponent(f.sectors?f.sectors.label:'—')+
+    '&volatility='+encodeURIComponent(f.volatility?f.volatility.label:'—')+
+    '&momentum='+encodeURIComponent(f.momentum?f.momentum.label:'—')+
+    '&t1='+encodeURIComponent(top3[0]?top3[0].sym+' SMS:'+top3[0].sms:'—')+
+    '&t2='+encodeURIComponent(top3[1]?top3[1].sym+' SMS:'+top3[1].sms:'—')+
+    '&t3='+encodeURIComponent(top3[2]?top3[2].sym+' SMS:'+top3[2].sms:'—')
+  );
+};
+
+// ══════════════════════════════════════════
+// ALERT SYSTEM — TIME PRIORITY ENGINE
+// ══════════════════════════════════════════
+V9.alert2 = V9.alert2 || {};
+
+V9.alert2.getTimePriority = function() {
+  var n    = new Date(), mins = n.getHours()*60+n.getMinutes();
+  if(mins >= 915)        return {level:'BLOCK',  minSMS:999, label:'🔴 NO NEW ENTRIES'};
+  if(mins >= 810)        return {level:'LOW',    minSMS:80,  label:'⚠️ LOW PRIORITY'};
+  if(mins >= 630)        return {level:'MEDIUM', minSMS:70,  label:'📊 MEDIUM PRIORITY'};
+  if(mins >= 555)        return {level:'HIGH',   minSMS:60,  label:'⚡ HIGH PRIORITY'};
+  return                        {level:'BLOCK',  minSMS:999, label:'⏰ NOT YET OPEN'};
+};
+
+// ── MOVE FILTER ──
+V9.alert2.checkMove = function(sym, price) {
+  var base = V9.state.basePrice[sym] || price;
+  var move = base > 0 ? (price-base)/base*100 : 0;
+  return {
+    isMoved:  move > 1.8,
+    movePct:  move,
+    base:     base
+  };
+};
+
+// ── LATE MARKER ──
+V9.alert2.markLate = function(sym, price, base) {
+  V9.state.lateStocks[sym] = {
+    markedAt:  Date.now(),
+    basePrice: base,
+    peakPrice: price,
+    watching:  true
+  };
+  V9.state.pullbackWatch[sym] = {
+    latePrice: price,
+    watching:  true
+  };
+};
+
+// ── PULLBACK RE-ENTRY CHECK ──
+V9.alert2.checkPullback = function(sym, currentPrice, sms) {
+  var pw  = V9.state.pullbackWatch[sym]; if(!pw||!pw.watching) return false;
+  var late= V9.state.lateStocks[sym];    if(!late) return false;
+  var move= late.latePrice - currentPrice;
+  var pct = late.latePrice > 0 ? move/late.latePrice*100 : 0;
+  // 30-50% retrace from late price
+  var retrace = late.latePrice > 0 ?
+    (late.latePrice - currentPrice)/(late.latePrice - late.basePrice)*100 : 0;
+  return retrace >= 30 && retrace <= 55 && sms >= 60;
+};
+
+// ── CONFIRM POSITION CHECK ──
+V9.alert2.hasOpenPosition = function(sym) {
+  var pos = V9.state.exitEngine && V9.state.exitEngine.positions;
+  return pos && !!pos[sym];
+};
+
+// ── WATCH ALERT (top 3 PRE-BRK only) ──
+V9.alert2.sendWatchAlert = function(stock) {
+  if(!V9.state.alertSettings.watchAlertEnabled) return;
+  var wq  = V9.state.watchQueue[stock.sym]; if(!wq) return;
+  if(wq.scanCount !== 2) return; // only at scan 2/3
+  // Only top 3 PRE-BRK by SMS
+  var prbk = V9.state.prbkStocks || [];
+  var top3  = prbk.slice(0,3).map(function(s){return s.sym;});
+  if(top3.indexOf(stock.sym) === -1) return;
+  // Cooldown — once per stock per session
+  if(wq.watchAlertSent) return;
+  wq.watchAlertSent = true;
+  V9.alerts.tgFetch(
+    'action=watch_alert_v9'+
+    '&sym='+encodeURIComponent(stock.sym)+
+    '&sms='+stock.sms+
+    '&scan=2'+
+    '&compress='+encodeURIComponent((V9.state.rangeHistory[stock.sym]||[]).length > 0 ? 'Yes' : 'No')+
+    '&volx='+encodeURIComponent(stock.volX.toFixed(1))+
+    '&time='+encodeURIComponent(pad(new Date().getHours())+':'+pad(new Date().getMinutes()))
+  );
+};
+
+// ══════════════════════════════════════════
+// MASTER ALERT GATE
+// All alerts pass through here
+// ══════════════════════════════════════════
+V9.alert2.canAlert = function(stock, tier) {
+  var sym   = stock.sym;
+  var price = stock.price;
+  var sms   = stock.sms;
+
+  // 1. EXPANSION — always send (exit warning)
+  if(tier === 'EXPANSION') return {ok:true, reason:'', isPullback:false};
+
+  // 2. Time check
+  var tp = V9.alert2.getTimePriority();
+  if(tp.level === 'BLOCK') return {ok:false, reason:'Outside trading hours'};
+
+  // 3. Move filter
+  var mv = V9.alert2.checkMove(sym, price);
+
+  // 4. LATE detection
+  if(mv.isMoved && tier !== 'CONFIRM') {
+    V9.alert2.markLate(sym, price, mv.base);
+    // Check pullback re-entry
+    var isPullback = V9.alert2.checkPullback(sym, price, sms);
+    if(isPullback) {
+      return {ok:true, reason:'PULLBACK RE-ENTRY', isPullback:true};
+    }
+    return {ok:false, reason:'LATE — moved '+mv.movePct.toFixed(1)+'% from base', isLate:true};
+  }
+
+  // 5. CONFIRM — only if position open
+  if(tier === 'CONFIRM') {
+    if(!V9.alert2.hasOpenPosition(sym)) {
+      return {ok:false, reason:'CONFIRM — no position open', appOnly:true};
+    }
+    return {ok:true, reason:'CONFIRM — add to position', isPullback:false};
+  }
+
+  // 6. SMS threshold by time
+  if(sms < tp.minSMS) {
+    return {ok:false, reason:'SMS '+sms+' below '+tp.minSMS+' for '+tp.level+' window'};
+  }
+
+  // 7. Day quality check
+  var dq = V9.state.dayQuality;
+  if(dq.mode === 'NO_TRADE' && tier === 'EARLY') {
+    return {ok:false, reason:'Day quality too low ('+dq.score+'/100)'};
+  }
+  if(dq.mode === 'LOW_RISK' && sms < 75) {
+    return {ok:false, reason:'LOW RISK day — need SMS ≥ 75'};
+  }
+
+  return {ok:true, reason:tp.label, isPullback:false};
+};
+
+// ══════════════════════════════════════════
+// HOOK INTO EXISTING ALERT SYSTEM
+// Wrap original fireStageAlert
+// ══════════════════════════════════════════
+var _origFireAlert = V9.alerts.fireStageAlert;
+V9.alerts.fireStageAlert = function(s, tier) {
+  var gate = V9.alert2.canAlert(s, tier);
+
+  if(!gate.ok) {
+    // Show in app only — update card status
+    if(gate.isLate) {
+      s.isLate    = true;
+      s.lateMove  = (V9.alert2.checkMove(s.sym, s.price).movePct).toFixed(1);
+    }
+    if(gate.appOnly) {
+      s.confirmAppOnly = true;
+    }
+    // Still update alert log in app — no Telegram
+    V9.state.alertLog.unshift({
+      sym:s.sym, price:s.price, chg:s.chg, sms:s.sms,
+      stage:s.stage?s.stage.label:'', tier:tier,
+      triggered:s.triggeredCount||0,
+      time:pad(new Date().getHours())+':'+pad(new Date().getMinutes()),
+      ts:Date.now(), appOnly:true, reason:gate.reason
+    });
+    V9.data.saveAlerts();
+    return;
+  }
+
+  // Pullback re-entry — modify tier label
+  if(gate.isPullback) {
+    s.isPullbackReentry = true;
+    s.pullbackBadge     = '🟠 PULLBACK RE-ENTRY';
+    // Clear late marker
+    delete V9.state.lateStocks[s.sym];
+    delete V9.state.pullbackWatch[s.sym];
+  }
+
+  // Send WATCH ALERT at scan 2/3 (PRE-BRK)
+  V9.alert2.sendWatchAlert(s);
+
+  // Fire original alert
+  _origFireAlert.call(this, s, tier);
+};
+
+// ══════════════════════════════════════════
+// LATE + PULLBACK BADGE ON STOCK CARDS
+// ══════════════════════════════════════════
+var _origBuildCardDQ = V9.ui.buildStockCard;
+V9.ui.buildStockCard = function(s) {
+  // Refresh late/pullback status
+  if(!s.isLate) {
+    var mv = V9.alert2.checkMove(s.sym, s.price);
+    if(mv.isMoved && s.stage && s.stage.id !== 'NONE') {
+      s.isLate   = true;
+      s.lateMove = mv.movePct.toFixed(1);
+    }
+  }
+  var pb = V9.alert2.checkPullback(s.sym, s.price, s.sms);
+  if(pb) { s.isPullbackReentry=true; s.isLate=false; }
+
+  var html = _origBuildCardDQ.call(this, s);
+
+  // Inject LATE badge
+  if(s.isLate && !s.isPullbackReentry) {
+    var lateBadge =
+      '<div style="background:var(--redl);border:1px solid rgba(255,69,96,.25);'+
+      'border-radius:var(--r3);padding:5px 8px;margin-top:5px">'+
+      '<div style="font-family:\'JetBrains Mono\';font-size:.32rem;color:var(--red)">🔴 LATE — already moved '+s.lateMove+'%</div>'+
+      '<div style="font-family:\'JetBrains Mono\';font-size:.28rem;color:var(--text3);margin-top:1px">Wait for 30-50% pullback · Base: ₹'+(V9.state.basePrice[s.sym]||s.price).toFixed(1)+'</div>'+
+      '</div>';
+    html = html.slice(0,-6) + lateBadge + html.slice(-6);
+  }
+
+  // Inject PULLBACK RE-ENTRY badge
+  if(s.isPullbackReentry) {
+    var pbBadge =
+      '<div style="background:var(--amberl);border:1px solid rgba(255,176,32,.25);'+
+      'border-radius:var(--r3);padding:5px 8px;margin-top:5px">'+
+      '<div style="font-family:\'JetBrains Mono\';font-size:.32rem;color:var(--amber)">🟠 PULLBACK RE-ENTRY</div>'+
+      '<div style="font-family:\'JetBrains Mono\';font-size:.28rem;color:var(--text3);margin-top:1px">40% retrace · SMS ≥ 60 · Second chance entry</div>'+
+      '</div>';
+    html = html.slice(0,-6) + pbBadge + html.slice(-6);
+  }
+
+  // Inject time priority badge (on TRADE signals only)
+  if(s.decision && s.decision.type === 'TRADE') {
+    var tp = V9.alert2.getTimePriority();
+    if(tp.level !== 'BLOCK') {
+      var tpCol = tp.level==='HIGH'?'var(--green)':tp.level==='MEDIUM'?'var(--amber)':'var(--red)';
+      var tpBadge = '<div style="font-family:\'JetBrains Mono\';font-size:.28rem;color:'+tpCol+';margin-top:3px">'+tp.label+'</div>';
+      html = html.slice(0,-6) + tpBadge + html.slice(-6);
+    }
+  }
+
+  return html;
+};
+
+// ══════════════════════════════════════════
+// SETTINGS — WATCH ALERT TOGGLE
+// ══════════════════════════════════════════
+(function injectWatchAlertSetting() {
+  function doInject() {
+    var settCard = document.querySelector('#scrSettings .card');
+    if(!settCard) return;
+    var row = document.createElement('div');
+    row.className = 'sett-row';
+    row.innerHTML =
+      '<div>'+
+      '<div class="sett-label">Watch Alert (PRE-BRK top 3)</div>'+
+      '<div class="sett-sub">Silent Telegram at scan 2/3</div>'+
+      '</div>'+
+      '<label class="toggle">'+
+      '<input type="checkbox" id="watchAlertToggle" onchange="V9.state.alertSettings.watchAlertEnabled=this.checked;try{localStorage.setItem(\'v9_watch_alert\',this.checked);}catch(e){}">'+
+      '<span class="toggle-sl"></span>'+
+      '</label>';
+    settCard.appendChild(row);
+    // Load saved
+    try {
+      var saved = localStorage.getItem('v9_watch_alert');
+      if(saved === 'true') {
+        V9.state.alertSettings.watchAlertEnabled = true;
+        var el = document.getElementById('watchAlertToggle');
+        if(el) el.checked = true;
+      }
+    }catch(e){}
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', doInject);
+  else setTimeout(doInject, 300);
+})();
+
+// ══════════════════════════════════════════
+// HOOK INTO SCAN — calculate DQ after scan
+// ══════════════════════════════════════════
+var _origRebuildDQ = V9.data.rebuildAllStocks;
+V9.data.rebuildAllStocks = function() {
+  _origRebuildDQ.call(this);
+  // Calculate DQ every scan if connected
+  if(V9.state.connected && V9.state.allStocks.length > 0) {
+    var dq = V9.state.dayQuality;
+    // Throttle — max once per minute
+    if(!dq.lastCalc || Date.now()-dq.lastCalc > 60000) {
+      V9.dq.calculate();
+    }
+  }
+};
+
+// ══════════════════════════════════════════
+// CLOUDFLARE WORKER HANDLERS
+// Add these to cloudflare-worker-v9.js
+//
+// if(action==='day_quality_v9') {
+//   const type=p.get('type'), score=p.get('score');
+//   const grade=p.get('grade'), max=p.get('max_trades');
+//   const gap=p.get('gap'), breadth=p.get('breadth');
+//   const sectors=p.get('sectors'), vol=p.get('volatility');
+//   const mom=p.get('momentum');
+//   const t1=p.get('t1'), t2=p.get('t2'), t3=p.get('t3');
+//   const scoreN=parseInt(score);
+//   const emoji=scoreN>=85?'💎':scoreN>=70?'🟢':scoreN>=50?'🟡':'🔴';
+//   await tg(
+//     emoji+' <b>DAY QUALITY — '+type+'</b>\n'+
+//     '━━━━━━━━━━━━━━━━━━━━━\n'+
+//     'Score: <b>'+score+'/100</b> '+grade+'\n'+
+//     'Max trades: <b>'+max+'</b>\n\n'+
+//     '📊 <b>Factors:</b>\n'+
+//     '  📈 '+gap+'\n'+
+//     '  🌡️ '+breadth+'\n'+
+//     '  🏆 '+sectors+'\n'+
+//     '  ⚡ '+vol+'\n'+
+//     '  🚀 '+mom+'\n\n'+
+//     (scoreN<50?'🔴 <b>AVOID TRADING TODAY</b>\nMarket conditions poor\n\n':
+//      scoreN<70?'🟡 <b>LOW RISK MODE</b>\nMax 1 trade | SMS ≥ 75\n\n':
+//      scoreN>=85?'💎 <b>PRIME DAY</b>\nAll signals active!\n\n':
+//      '🟢 <b>NORMAL DAY</b>\nMax 2 trades\n\n')+
+//     '🏆 <b>Top 3 to watch:</b>\n'+
+//     '  1. '+t1+'\n  2. '+t2+'\n  3. '+t3+'\n\n'+
+//     '⏰ 🤖 NSE PRO V9'
+//   );
+//   return jr({status:'ok'});
+// }
+//
+// if(action==='watch_alert_v9') {
+//   const sym=p.get('sym'), sms=p.get('sms');
+//   const scan=p.get('scan'), volx=p.get('volx'), time=p.get('time');
+//   await tg(
+//     '👁️ <b>WATCH ALERT — '+sym+'</b>\n\n'+
+//     'PRE-BRK forming · Scan '+scan+'/3\n'+
+//     'SMS: '+sms+' — building\n'+
+//     'Vol: '+volx+'x\n\n'+
+//     '⚠️ Not a trade signal\n'+
+//     'Monitoring for breakout\n'+
+//     '⏰ '+time+' | 🤖 V9'
+//   );
+//   return jr({status:'ok'});
+// }
+// ══════════════════════════════════════════
+
+// ══════════════════════════════════════════
+// NSE PRO V9 — PATCH 2B END
+// PASTE UI PATCH BELOW
+// OR PASTE PART 8 IF SKIPPING UI PATCH
+// ══════════════════════════════════════════
 // ═══════════════════════════════════════════
 // NSE PRO V9 BETA — PART 8 (FINAL)
 // Boot Sequence + V9.init + Closing Tags
