@@ -8195,6 +8195,821 @@ V9.data.rebuildAllStocks = function() {
 // PASTE UI PATCH BELOW
 // OR PASTE PART 8 IF SKIPPING UI PATCH
 // ══════════════════════════════════════════
+   // ═══════════════════════════════════════════
+// NSE PRO V9 — PATCH 3
+// SWING TRACKER — Complete System
+//
+// Features:
+//   SCAN | TRACKER sub-tabs in SWING
+//   Max 5 positions with custom hold period
+//   ACTION system: HOLD/ADD/PARTIAL/FULL EXIT
+//   Entry Quality: PERFECT/GOOD/RISKY
+//   Confidence Score (trend+sector+SMS+vol)
+//   HOLD/WATCH/EXIT/TARGET status
+//   Alerts — tracked stocks only
+//   Time exit: profit>5% = extend
+//   Persistent localStorage
+//
+// Paste AFTER Patch 2B, BEFORE Part 8
+// ═══════════════════════════════════════════
+
+// ══════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════
+V9.state.swingTracker = V9.state.swingTracker || {
+  positions: {},
+  activeTab: 'scan',
+  closedTrades: []
+};
+
+var SWT_MAX = 5;
+
+// ══════════════════════════════════════════
+// SWING TRACKER ENGINE
+// ══════════════════════════════════════════
+V9.swt = V9.swt || {};
+
+// ── SAVE / LOAD ──
+V9.swt.save = function() {
+  try {
+    localStorage.setItem('v9_swt', JSON.stringify({
+      positions:    V9.state.swingTracker.positions,
+      closedTrades: V9.state.swingTracker.closedTrades.slice(-50)
+    }));
+  } catch(e) {}
+};
+
+V9.swt.load = function() {
+  try {
+    var d = JSON.parse(localStorage.getItem('v9_swt') || '{}');
+    if(d.positions)    V9.state.swingTracker.positions    = d.positions;
+    if(d.closedTrades) V9.state.swingTracker.closedTrades = d.closedTrades;
+  } catch(e) {}
+};
+
+// ══════════════════════════════════════════
+// ENTRY QUALITY
+// PERFECT / GOOD / RISKY
+// ══════════════════════════════════════════
+V9.swt.calcEntryQuality = function(stock) {
+  var s      = stock || {};
+  var score  = 0;
+  var flags  = [];
+
+  // Volume at entry
+  if(s.volX >= 2.5)      { score+=3; flags.push('Strong volume'); }
+  else if(s.volX >= 1.5) { score+=2; flags.push('Good volume'); }
+  else                   { score+=0; flags.push('Weak volume'); }
+
+  // SMS at entry
+  if(s.sms >= 75)        { score+=3; flags.push('SMS strong'); }
+  else if(s.sms >= 60)   { score+=2; flags.push('SMS ok'); }
+  else                   { score+=0; flags.push('SMS weak'); }
+
+  // Not fake breakout
+  if(!s.blockAlert)      { score+=2; flags.push('Clean signal'); }
+  else                   { flags.push('Fake breakout risk'); }
+
+  // Swing score
+  if(s.swingScore >= 70) { score+=2; flags.push('High swing score'); }
+  else if(s.swingScore >= 55) { score+=1; }
+
+  var quality, emoji, color;
+  if(score >= 8)      { quality='PERFECT'; emoji='⭐'; color='var(--green)'; }
+  else if(score >= 5) { quality='GOOD';    emoji='✅'; color='var(--amber)'; }
+  else                { quality='RISKY';   emoji='⚠️'; color='var(--red)'; }
+
+  return { quality:quality, emoji:emoji, color:color, score:score, flags:flags };
+};
+
+// ══════════════════════════════════════════
+// CONFIDENCE SCORE (0-100)
+// Based on trend + sector + SMS + volume
+// ══════════════════════════════════════════
+V9.swt.calcConfidence = function(sym) {
+  var st    = V9.state;
+  var stock = st.allStocks.find(function(s){ return s.sym === sym; });
+  if(!stock) return {score:50, trend:'UNKNOWN', sectorStr:'—'};
+
+  var score = 0;
+
+  // Trend (SMS direction)
+  var hist  = st.smsHistory[sym] || [];
+  var trend = 'FLAT';
+  if(hist.length >= 2) {
+    var diff = hist[hist.length-1] - hist[hist.length-2];
+    if(diff >= 3)       { trend='RISING';  score+=30; }
+    else if(diff >= 0)  { trend='STABLE';  score+=20; }
+    else if(diff >= -5) { trend='FALLING'; score+=5; }
+    else                { trend='WEAK';    score+=0; }
+  } else { score+=15; }
+
+  // SMS current
+  if(stock.sms >= 80)      score+=25;
+  else if(stock.sms >= 70) score+=18;
+  else if(stock.sms >= 60) score+=10;
+
+  // Volume
+  if(stock.volX >= 2)      score+=20;
+  else if(stock.volX >= 1.5) score+=12;
+  else if(stock.volX >= 1) score+=6;
+
+  // Sector strength
+  var large    = st.largeStocks;
+  var secStks  = large.filter(function(s){ return s.sec===stock.sec; });
+  var secAvg   = secStks.length ?
+    secStks.reduce(function(a,s){return a+s.chg;},0)/secStks.length : 0;
+  var sectorStr;
+  if(secAvg >= 1)       { score+=25; sectorStr='🔥 LEADING'; }
+  else if(secAvg >= 0)  { score+=12; sectorStr='⚠️ NEUTRAL'; }
+  else                  { score+=0;  sectorStr='❌ WEAK'; }
+
+  score = Math.min(Math.round(score), 100);
+  return { score:score, trend:trend, sectorStr:sectorStr, secAvg:secAvg };
+};
+
+// ══════════════════════════════════════════
+// TIME EXIT LOGIC
+// profit > 5% → extend | else → exit 7-10d
+// ══════════════════════════════════════════
+V9.swt.checkTimeExit = function(pos) {
+  var entryDate = new Date(pos.entryDate);
+  var today     = new Date();
+  var daysHeld  = Math.floor((today - entryDate) / (1000*60*60*24));
+  var pnlPct    = pos.entry > 0 ? (pos.currentPrice - pos.entry)/pos.entry*100 : 0;
+  var maxDays   = pos.maxDays || 10;
+
+  // If profit > 5% — allow extension
+  if(pnlPct >= 5 && daysHeld < maxDays + 5) {
+    return { exit:false, daysHeld:daysHeld, extended:true,
+      note:'Profit '+pnlPct.toFixed(1)+'% > 5% — extended to '+(maxDays+5)+' days' };
+  }
+
+  // Approaching limit — warn at 80% of max days
+  if(daysHeld >= Math.floor(maxDays * 0.8) && daysHeld < maxDays) {
+    return { exit:false, warn:true, daysHeld:daysHeld, extended:false,
+      note:daysHeld+'/'+maxDays+' days — prepare to exit' };
+  }
+
+  // Past max days
+  if(daysHeld >= maxDays) {
+    return { exit:true, daysHeld:daysHeld, extended:false,
+      note:'Time limit '+maxDays+' days reached' };
+  }
+
+  return { exit:false, daysHeld:daysHeld, extended:false, note:'' };
+};
+
+// ══════════════════════════════════════════
+// STATUS EVALUATOR
+// HOLD / WATCH / EXIT / TARGET
+// ══════════════════════════════════════════
+V9.swt.evalStatus = function(pos) {
+  var sym   = pos.sym;
+  var stock = V9.state.allStocks.find(function(s){ return s.sym===sym; });
+  if(!stock) return {status:'WATCH', action:'HOLD', reasons:['No price data']};
+
+  var price  = stock.price;
+  var pnlPct = pos.entry > 0 ? (price - pos.entry)/pos.entry*100 : 0;
+  var reasons= [];
+  var status = 'HOLD';
+  var action = 'HOLD';
+
+  // Update current price and peak
+  pos.currentPrice = price;
+  if(!pos.peakPrice || price > pos.peakPrice) pos.peakPrice = price;
+
+  // TARGET HIT
+  if(pos.target && price >= pos.target) {
+    return {status:'TARGET', action:'FULL EXIT', reasons:['🎯 Target hit ₹'+pos.target]};
+  }
+
+  // SL HIT
+  if(pos.sl && price <= pos.sl) {
+    return {status:'EXIT', action:'FULL EXIT', reasons:['🛑 Stop loss hit ₹'+pos.sl]};
+  }
+
+  // Time exit check
+  var timeChk = V9.swt.checkTimeExit(pos);
+  if(timeChk.exit) {
+    reasons.push('⏰ '+timeChk.note);
+    return {status:'EXIT', action:'FULL EXIT', reasons:reasons};
+  }
+  if(timeChk.warn) reasons.push('⏰ '+timeChk.note);
+
+  // SMS drop check
+  var hist    = V9.state.smsHistory[sym] || [];
+  var smsDrop = 0;
+  if(hist.length >= 2) {
+    var peak = Math.max.apply(null, hist);
+    smsDrop  = peak - stock.sms;
+  }
+  if(smsDrop >= 15) {
+    reasons.push('📉 SMS dropped '+smsDrop.toFixed(0)+' pts');
+    status = 'EXIT'; action = 'FULL EXIT';
+  } else if(smsDrop >= 8) {
+    reasons.push('⚠️ SMS weakening -'+smsDrop.toFixed(0));
+    status = 'WATCH'; action = 'HOLD';
+  }
+
+  // Sector check
+  var conf = V9.swt.calcConfidence(sym);
+  if(conf.secAvg !== undefined && conf.secAvg < -0.5) {
+    reasons.push('📊 Sector '+stock.sec+' turning weak');
+    if(status === 'HOLD') { status='WATCH'; action='HOLD'; }
+  }
+
+  // Profit tiers — action suggestions
+  if(pnlPct >= 10) {
+    reasons.push('💰 +'+pnlPct.toFixed(1)+'% — consider partial exit');
+    if(status === 'HOLD') action = 'PARTIAL EXIT';
+  } else if(pnlPct >= 5) {
+    reasons.push('✅ +'+pnlPct.toFixed(1)+'% — trailing');
+    if(status === 'HOLD') action = 'ADD';
+  } else if(pnlPct < -2) {
+    reasons.push('⚠️ -'+Math.abs(pnlPct).toFixed(1)+'% — near SL');
+    if(status === 'HOLD') { status='WATCH'; action='HOLD'; }
+  }
+
+  if(!reasons.length) reasons.push('📈 Trend intact — hold');
+  return {status:status, action:action, reasons:reasons,
+    pnlPct:pnlPct, daysHeld:timeChk.daysHeld, conf:conf};
+};
+
+// ══════════════════════════════════════════
+// ADD POSITION
+// ══════════════════════════════════════════
+V9.swt.addPosition = function(sym, entry, sl, target, entryType, maxDays, notes, stock) {
+  var st  = V9.state.swingTracker;
+  if(Object.keys(st.positions).length >= SWT_MAX) {
+    V9.ui.showToast('⚠️ Max '+SWT_MAX+' swing positions reached','Remove a position first','toast-warn');
+    return false;
+  }
+  if(!sym || !entry) return false;
+
+  var s   = stock || V9.state.allStocks.find(function(x){return x.sym===sym;}) || {};
+  var eq  = V9.swt.calcEntryQuality(s);
+  var today = new Date().toISOString().split('T')[0];
+
+  st.positions[sym] = {
+    sym:          sym,
+    entry:        parseFloat(entry),
+    sl:           parseFloat(sl)     || parseFloat(entry)*0.97,
+    target:       parseFloat(target) || parseFloat(entry)*1.12,
+    entryType:    entryType || 'BREAKOUT',
+    entryDate:    today,
+    entryTime:    pad(new Date().getHours())+':'+pad(new Date().getMinutes()),
+    maxDays:      parseInt(maxDays) || 10,
+    notes:        notes || '',
+    sector:       s.sec || '—',
+    swingScore:   s.swingScore || 0,
+    entryQuality: eq,
+    currentPrice: parseFloat(entry),
+    peakPrice:    parseFloat(entry),
+    status:       'HOLD',
+    action:       'HOLD',
+    alertFired:   {},
+    addedFromScan: !!stock
+  };
+
+  V9.swt.save();
+  V9.ui.showToast('📌 Tracking — '+sym,'Entry: ₹'+entry+' | '+eq.emoji+' '+eq.quality,'toast-trade');
+  V9.ui.haptic('success');
+  V9.swt.renderTracker();
+  return true;
+};
+
+// ── ADD FROM SCAN BUTTON ──
+V9.swt.addFromScan = function(sym) {
+  var stock = V9.state.allStocks.find(function(s){return s.sym===sym;});
+  if(!stock) { V9.ui.showToast('⚠️ Stock not found in scan','—','toast-warn'); return; }
+  var tgt   = stock.swingTargets || {};
+  var et    = stock.swingEntry   || {};
+  V9.swt.addPosition(
+    sym,
+    stock.price,
+    tgt.sl     || stock.price*0.97,
+    tgt.moderate ? stock.price*(1+tgt.modPct/100) : stock.price*1.10,
+    et.type    || 'BREAKOUT',
+    10, '', stock
+  );
+};
+
+// ── REMOVE POSITION ──
+V9.swt.removePosition = function(sym, reason) {
+  var st  = V9.state.swingTracker;
+  var pos = st.positions[sym]; if(!pos) return;
+  var pnl = pos.currentPrice && pos.entry ?
+    (pos.currentPrice - pos.entry)/pos.entry*100 : 0;
+  st.closedTrades.push({
+    sym:sym, entry:pos.entry, exit:pos.currentPrice||pos.entry,
+    pnlPct:pnl.toFixed(2), reason:reason||'MANUAL',
+    entryDate:pos.entryDate, exitDate:new Date().toISOString().split('T')[0],
+    daysHeld:V9.swt.checkTimeExit(pos).daysHeld||0
+  });
+  delete st.positions[sym];
+  V9.swt.save();
+  V9.swt.renderTracker();
+};
+
+// ══════════════════════════════════════════
+// PROCESS ALL POSITIONS — every scan
+// ══════════════════════════════════════════
+V9.swt.processAll = function() {
+  var st  = V9.state.swingTracker;
+  var pos = st.positions;
+  Object.keys(pos).forEach(function(sym) {
+    var p      = pos[sym];
+    var result = V9.swt.evalStatus(p);
+    p.status   = result.status;
+    p.action   = result.action;
+    p.evalResult = result;
+
+    // Alert logic — tracked stocks only, once per type + cooldown
+    var topReason = result.reasons[0] || '';
+    var alertKey  = result.status+'_'+sym;
+    var lastFired = p.alertFired[alertKey];
+    var cooldown  = result.status==='EXIT'||result.status==='TARGET' ? 60000 : 3600000; // 1min / 1hr
+
+    if(!lastFired || (Date.now()-lastFired) > cooldown) {
+      if(result.status === 'TARGET' || result.status === 'EXIT') {
+        p.alertFired[alertKey] = Date.now();
+        var icon  = result.status==='TARGET'?'🎯':'🔴';
+        var title = icon+' SWING '+result.status+' — '+sym;
+        V9.ui.showToast(title, topReason, result.status==='TARGET'?'toast-trade':'toast-sell');
+        V9.ui.playBeep(result.status==='TARGET'?880:440,'sine',0.6);
+        V9.ui.haptic('alert');
+        V9.swt.sendAlert(sym, p, result);
+        // Push notification
+        if('Notification' in window && Notification.permission==='granted') {
+          try{ new Notification(title,{body:topReason,tag:sym+'_swt'}); }catch(e){}
+        }
+      } else if(result.status === 'WATCH' && !lastFired) {
+        // WATCH alert — only once per stock
+        p.alertFired[alertKey] = Date.now();
+        V9.ui.showToast('⚠️ WATCH — '+sym, topReason, 'toast-warn');
+        V9.swt.sendAlert(sym, p, result);
+      }
+    }
+  });
+
+  V9.swt.save();
+  if(V9.state.swingTracker.activeTab === 'tracker') V9.swt.renderTracker();
+};
+
+// ══════════════════════════════════════════
+// TELEGRAM ALERTS — tracked stocks only
+// ══════════════════════════════════════════
+V9.swt.sendAlert = function(sym, pos, result) {
+  var pnl = pos.currentPrice && pos.entry ?
+    (pos.currentPrice-pos.entry)/pos.entry*100 : 0;
+  V9.alerts.tgFetch(
+    'action=swing_tracker_v9'+
+    '&sym='+encodeURIComponent(sym)+
+    '&status='+encodeURIComponent(result.status)+
+    '&action_rec='+encodeURIComponent(result.action)+
+    '&reason='+encodeURIComponent((result.reasons||[]).slice(0,2).join(' | '))+
+    '&entry='+encodeURIComponent(pos.entry.toFixed(2))+
+    '&current='+encodeURIComponent((pos.currentPrice||pos.entry).toFixed(2))+
+    '&pnl_pct='+encodeURIComponent(pnl.toFixed(2))+
+    '&sl='+encodeURIComponent(pos.sl.toFixed(2))+
+    '&target='+encodeURIComponent(pos.target.toFixed(2))+
+    '&days='+encodeURIComponent(result.daysHeld||0)+
+    '&conf='+encodeURIComponent(result.conf?result.conf.score:0)+
+    '&time='+encodeURIComponent(pad(new Date().getHours())+':'+pad(new Date().getMinutes()))
+  );
+};
+
+// ══════════════════════════════════════════
+// TRACKER RENDERER
+// ══════════════════════════════════════════
+V9.swt.renderTracker = function() {
+  var el = document.getElementById('swtTrackerContent'); if(!el) return;
+  var st = V9.state.swingTracker;
+  var pos= st.positions;
+  var keys = Object.keys(pos);
+
+  // Portfolio overview
+  var totalInvested = 0, totalPnlPct = 0, wins = 0;
+  keys.forEach(function(sym) {
+    var p   = pos[sym];
+    var pnl = p.currentPrice && p.entry ? (p.currentPrice-p.entry)/p.entry*100 : 0;
+    totalInvested += p.entry * 100; // approximate
+    totalPnlPct   += pnl;
+    if(pnl > 0) wins++;
+  });
+  var avgPnl = keys.length ? (totalPnlPct/keys.length).toFixed(1) : 0;
+
+  var html = '';
+
+  // ── OVERVIEW CARD ──
+  html +=
+    '<div style="background:linear-gradient(135deg,rgba(245,166,35,.08),rgba(245,166,35,.02));'+
+    'border:1px solid rgba(245,166,35,.2);border-radius:var(--r);padding:12px;margin-bottom:10px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
+    '<div>'+
+    '<div style="font-family:\'Outfit\';font-weight:800;font-size:.85rem;color:var(--gold)">📊 SWING PORTFOLIO</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.3rem;color:var(--text3);margin-top:1px">'+
+    keys.length+'/'+SWT_MAX+' positions · '+wins+' winning'+
+    '</div>'+
+    '</div>'+
+    '<div style="text-align:right">'+
+    '<div style="font-family:\'Outfit\';font-weight:800;font-size:1.1rem;color:'+(parseFloat(avgPnl)>=0?'var(--green)':'var(--red)')+'">'+
+    (parseFloat(avgPnl)>=0?'+':'')+avgPnl+'%</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.28rem;color:var(--text3)">avg P&L</div>'+
+    '</div>'+
+    '</div>'+
+    // Win/loss bar
+    (keys.length ?
+      '<div style="height:4px;background:var(--redl);border-radius:4px;overflow:hidden">'+
+      '<div style="height:100%;width:'+(wins/keys.length*100).toFixed(0)+'%;background:var(--green);border-radius:4px"></div>'+
+      '</div>':'')+
+    '</div>';
+
+  // ── ADD POSITION BUTTON ──
+  html +=
+    '<button onclick="V9.swt.showAddForm()" style="width:100%;padding:10px;'+
+    'background:rgba(245,166,35,.08);border:1px dashed rgba(245,166,35,.3);'+
+    'border-radius:var(--r2);color:var(--gold);font-family:\'JetBrains Mono\';font-size:.38rem;'+
+    'cursor:pointer;margin-bottom:8px">+ ADD POSITION</button>';
+
+  // Add form (hidden by default)
+  html +=
+    '<div id="swtAddForm" style="display:none">'+
+    '<div class="card">'+
+    '<div class="card-title">➕ ADD SWING POSITION</div>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:5px">'+
+    '<input class="jnl-input" id="swtSym"    placeholder="Symbol" style="text-transform:uppercase">'+
+    '<input class="jnl-input" id="swtEntry"  type="number" placeholder="Entry ₹">'+
+    '<input class="jnl-input" id="swtSL"     type="number" placeholder="Stop Loss ₹">'+
+    '<input class="jnl-input" id="swtTarget" type="number" placeholder="Target ₹">'+
+    '<input class="jnl-input" id="swtDays"   type="number" placeholder="Max days (7-15)" value="10">'+
+    '<input class="jnl-input" id="swtNotes"  placeholder="Notes (optional)">'+
+    '</div>'+
+    '<div style="margin-bottom:5px">'+
+    '<select class="jnl-input" id="swtType" style="width:100%">'+
+    '<option value="BREAKOUT">🚀 Breakout Entry</option>'+
+    '<option value="PULLBACK">📉 Pullback Entry</option>'+
+    '<option value="TREND">📈 Trend Continuation</option>'+
+    '</select>'+
+    '</div>'+
+    '<div style="display:flex;gap:5px">'+
+    '<button onclick="V9.swt.submitAddForm()" class="sim-btn p" style="flex:1">📌 TRACK</button>'+
+    '<button onclick="document.getElementById(\'swtAddForm\').style.display=\'none\'" class="sim-btn" style="flex:0 0 60px">✕</button>'+
+    '</div>'+
+    '<div class="cmsg" id="swtMsg" style="display:none;margin-top:5px"></div>'+
+    '</div>'+
+    '</div>';
+
+  // ── POSITIONS ──
+  if(!keys.length) {
+    html += '<div class="empty" style="padding:30px 12px">📌<br><br>No swing positions tracked<br>'+
+      '<span style="font-size:.85em;opacity:.6">Add manually or tap 📌 TRACK on any SCAN card</span></div>';
+  } else {
+    keys.forEach(function(sym) {
+      html += V9.swt.buildPositionCard(pos[sym]);
+    });
+  }
+
+  // ── CLOSED TRADES ──
+  var closed = st.closedTrades || [];
+  if(closed.length) {
+    html +=
+      '<div style="margin-top:10px">'+
+      '<div class="sec-hdr">📋 CLOSED TRADES <span class="sec-hdr-sub">'+closed.length+' total</span></div>'+
+      '<table class="tbl"><tr><th>SYM</th><th>ENTRY</th><th>EXIT</th><th>P&L</th><th>DAYS</th><th>WHY</th></tr>'+
+      closed.slice(-10).reverse().map(function(t){
+        return '<tr>'+
+          '<td style="font-weight:600">'+t.sym+'</td>'+
+          '<td>₹'+parseFloat(t.entry).toFixed(1)+'</td>'+
+          '<td>₹'+parseFloat(t.exit).toFixed(1)+'</td>'+
+          '<td style="color:'+(parseFloat(t.pnlPct)>=0?'var(--green)':'var(--red)')+'">'+(parseFloat(t.pnlPct)>=0?'+':'')+t.pnlPct+'%</td>'+
+          '<td>'+t.daysHeld+'d</td>'+
+          '<td style="color:var(--text3);font-size:.26rem">'+t.reason+'</td>'+
+          '</tr>';
+      }).join('')+
+      '</table></div>';
+  }
+
+  el.innerHTML = html;
+};
+
+// ══════════════════════════════════════════
+// POSITION CARD BUILDER
+// ══════════════════════════════════════════
+V9.swt.buildPositionCard = function(pos) {
+  var sym    = pos.sym;
+  var result = pos.evalResult || {status:'HOLD',action:'HOLD',reasons:['Loading…'],pnlPct:0,daysHeld:0,conf:{score:50,trend:'—',sectorStr:'—'}};
+  var pnlPct = result.pnlPct || 0;
+  var conf   = result.conf   || {score:50, trend:'—', sectorStr:'—'};
+  var eq     = pos.entryQuality || {emoji:'✅', quality:'GOOD', color:'var(--amber)'};
+  var price  = pos.currentPrice || pos.entry;
+
+  // Status config
+  var sCfg = {
+    HOLD:   {col:'var(--green)', bg:'rgba(0,217,126,.08)',  bdr:'rgba(0,217,126,.25)',  emoji:'🟢'},
+    WATCH:  {col:'var(--amber)', bg:'rgba(255,176,32,.08)', bdr:'rgba(255,176,32,.25)', emoji:'👁️'},
+    EXIT:   {col:'var(--red)',   bg:'rgba(255,69,96,.1)',   bdr:'rgba(255,69,96,.3)',   emoji:'🔴'},
+    TARGET: {col:'var(--gold)',  bg:'rgba(245,166,35,.1)',  bdr:'rgba(245,166,35,.3)',  emoji:'🎯'}
+  };
+  var sc = sCfg[result.status] || sCfg.HOLD;
+
+  // Action config
+  var aCfg = {
+    'HOLD':         {col:'var(--green)', label:'HOLD'},
+    'ADD':          {col:'var(--teal)',  label:'ADD MORE'},
+    'PARTIAL EXIT': {col:'var(--amber)', label:'PARTIAL EXIT'},
+    'FULL EXIT':    {col:'var(--red)',   label:'FULL EXIT'}
+  };
+  var ac = aCfg[result.action] || aCfg['HOLD'];
+
+  // Progress to target
+  var progressPct = 0;
+  if(pos.target > pos.sl && pos.sl > 0) {
+    var totalRange = pos.target - pos.sl;
+    var current    = price - pos.sl;
+    progressPct    = Math.min(Math.max(current/totalRange*100, 0), 100);
+  }
+  var progressCol = progressPct >= 80?'var(--gold)':progressPct>=50?'var(--green)':'var(--amber)';
+
+  // Days held
+  var daysHeld    = result.daysHeld || 0;
+  var timeResult  = V9.swt.checkTimeExit(pos);
+
+  var h = '';
+  h +=
+    '<div style="background:var(--card);border:1px solid '+sc.bdr+';border-left:3px solid '+sc.col+';'+
+    'border-radius:var(--r);padding:12px;margin-bottom:8px">';
+
+  // ── HEADER ROW ──
+  h +=
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">'+
+    '<div>'+
+    '<div style="font-family:\'Outfit\';font-weight:800;font-size:.95rem">'+sym+'</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.3rem;color:var(--text3);margin-top:1px">'+
+    pos.sector+' · '+pos.entryType+' · '+daysHeld+'d held'+
+    (timeResult.extended?' · ⏱️ Extended':'')+'</div>'+
+    '</div>'+
+    '<div style="text-align:right">'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.38rem;font-weight:600;color:'+sc.col+'">'+sc.emoji+' '+result.status+'</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.32rem;color:'+ac.col+';margin-top:2px">→ '+ac.label+'</div>'+
+    '</div>'+
+    '</div>';
+
+  // ── P&L + PRICE ROW ──
+  h +=
+    '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px;margin-bottom:8px">'+
+    '<div class="etsl-box"><div class="etsl-val ev">₹'+pos.entry.toFixed(1)+'</div><div class="etsl-lbl">ENTRY</div></div>'+
+    '<div class="etsl-box"><div class="etsl-val '+(pnlPct>=0?'up':'dn')+'">₹'+price.toFixed(1)+'</div><div class="etsl-lbl">CURRENT</div></div>'+
+    '<div class="etsl-box"><div class="etsl-val '+(pnlPct>=0?'up':'dn')+'">'+(pnlPct>=0?'+':'')+pnlPct.toFixed(2)+'%</div><div class="etsl-lbl">P&L</div></div>'+
+    '<div class="etsl-box"><div class="etsl-val er">'+daysHeld+'/'+pos.maxDays+'d</div><div class="etsl-lbl">DAYS</div></div>'+
+    '</div>';
+
+  // ── PROGRESS TO TARGET ──
+  h +=
+    '<div style="margin-bottom:8px">'+
+    '<div style="display:flex;justify-content:space-between;margin-bottom:3px">'+
+    '<span style="font-family:\'JetBrains Mono\';font-size:.28rem;color:var(--red)">SL ₹'+pos.sl.toFixed(1)+'</span>'+
+    '<span style="font-family:\'JetBrains Mono\';font-size:.28rem;color:var(--text3)">Progress '+progressPct.toFixed(0)+'%</span>'+
+    '<span style="font-family:\'JetBrains Mono\';font-size:.28rem;color:var(--green)">T ₹'+pos.target.toFixed(1)+'</span>'+
+    '</div>'+
+    '<div style="height:5px;background:var(--border);border-radius:5px;overflow:hidden">'+
+    '<div style="height:100%;width:'+progressPct+'%;background:'+progressCol+';border-radius:5px;transition:width .5s"></div>'+
+    '</div>'+
+    '</div>';
+
+  // ── CONFIDENCE + QUALITY ROW ──
+  var confCol = conf.score>=75?'var(--green)':conf.score>=50?'var(--amber)':'var(--red)';
+  h +=
+    '<div style="display:flex;gap:5px;margin-bottom:7px">'+
+    '<div style="flex:1;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:var(--r3);padding:6px 8px">'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.26rem;color:var(--text3);margin-bottom:2px">CONFIDENCE</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.38rem;font-weight:600;color:'+confCol+'">'+conf.score+'%</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.26rem;color:var(--text3)">'+conf.trend+'</div>'+
+    '</div>'+
+    '<div style="flex:1;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:var(--r3);padding:6px 8px">'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.26rem;color:var(--text3);margin-bottom:2px">SECTOR</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.34rem;font-weight:600">'+conf.sectorStr+'</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.26rem;color:var(--text3)">'+pos.sector+'</div>'+
+    '</div>'+
+    '<div style="flex:1;background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:var(--r3);padding:6px 8px">'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.26rem;color:var(--text3);margin-bottom:2px">ENTRY</div>'+
+    '<div style="font-family:\'JetBrains Mono\';font-size:.34rem;color:'+eq.color+'">'+eq.emoji+' '+eq.quality+'</div>'+
+    '</div>'+
+    '</div>';
+
+  // ── REASONS ──
+  if(result.reasons && result.reasons.length) {
+    h +=
+      '<div style="background:rgba(255,255,255,.02);border:1px solid var(--border);'+
+      'border-radius:var(--r3);padding:6px 8px;margin-bottom:7px">'+
+      result.reasons.slice(0,3).map(function(r){
+        return '<div style="font-family:\'JetBrains Mono\';font-size:.3rem;color:var(--text2);margin:1px 0">'+r+'</div>';
+      }).join('')+
+      '</div>';
+  }
+
+  // ── ACTION BUTTONS ──
+  h +=
+    '<div style="display:flex;gap:4px">'+
+    '<button onclick="V9.swt.removePosition(\''+sym+'\',\'FULL EXIT\')" '+
+    'style="flex:1;padding:7px;background:var(--redl);border:1px solid rgba(255,69,96,.25);'+
+    'border-radius:var(--r3);color:var(--red);font-family:\'JetBrains Mono\';font-size:.3rem;cursor:pointer">'+
+    '✕ FULL EXIT</button>'+
+    '<button onclick="V9.swt.removePosition(\''+sym+'\',\'PARTIAL EXIT\')" '+
+    'style="flex:1;padding:7px;background:var(--amberl);border:1px solid rgba(255,176,32,.25);'+
+    'border-radius:var(--r3);color:var(--amber);font-family:\'JetBrains Mono\';font-size:.3rem;cursor:pointer">'+
+    '½ PARTIAL</button>'+
+    '<button onclick="V9.swt.showUpdateSL(\''+sym+'\')" '+
+    'style="flex:1;padding:7px;background:rgba(255,255,255,.04);border:1px solid var(--border);'+
+    'border-radius:var(--r3);color:var(--text2);font-family:\'JetBrains Mono\';font-size:.3rem;cursor:pointer">'+
+    '✏️ UPDATE SL</button>'+
+    '</div>';
+
+  // Update SL form (hidden)
+  h +=
+    '<div id="swtSLForm_'+sym+'" style="display:none;margin-top:6px">'+
+    '<div style="display:flex;gap:5px">'+
+    '<input class="jnl-input" id="swtNewSL_'+sym+'" type="number" placeholder="New SL ₹" style="flex:1">'+
+    '<button onclick="V9.swt.updateSL(\''+sym+'\')" class="sim-btn p">UPDATE</button>'+
+    '</div>'+
+    '</div>';
+
+  h += '</div>'; // end card
+  return h;
+};
+
+// ── UPDATE SL ──
+V9.swt.showUpdateSL = function(sym) {
+  var f = document.getElementById('swtSLForm_'+sym);
+  if(f) f.style.display = f.style.display==='none'?'block':'none';
+};
+
+V9.swt.updateSL = function(sym) {
+  var inp = document.getElementById('swtNewSL_'+sym);
+  if(!inp) return;
+  var newSL = parseFloat(inp.value);
+  if(!newSL) return;
+  var pos = V9.state.swingTracker.positions[sym];
+  if(!pos) return;
+  pos.sl = newSL;
+  V9.swt.save();
+  V9.swt.renderTracker();
+  V9.ui.haptic('light');
+};
+
+// ── ADD FORM HELPERS ──
+V9.swt.showAddForm = function() {
+  var f = document.getElementById('swtAddForm');
+  if(f) f.style.display = f.style.display==='none'?'block':'none';
+};
+
+V9.swt.submitAddForm = function() {
+  var sym    = ((document.getElementById('swtSym')||{}).value||'').toUpperCase().trim();
+  var entry  = parseFloat((document.getElementById('swtEntry')||{}).value||0);
+  var sl     = parseFloat((document.getElementById('swtSL')||{}).value||0);
+  var target = parseFloat((document.getElementById('swtTarget')||{}).value||0);
+  var days   = parseInt((document.getElementById('swtDays')||{}).value||10);
+  var notes  = (document.getElementById('swtNotes')||{}).value||'';
+  var type   = (document.getElementById('swtType')||{}).value||'BREAKOUT';
+  var msg    = document.getElementById('swtMsg');
+
+  if(!sym||!entry) {
+    if(msg){msg.textContent='Enter symbol and entry price';msg.className='cmsg cmsg-err';msg.style.display='block';setTimeout(function(){msg.style.display='none';},2000);}
+    return;
+  }
+  var ok = V9.swt.addPosition(sym, entry, sl, target, type, days, notes, null);
+  if(ok) {
+    ['swtSym','swtEntry','swtSL','swtTarget','swtNotes'].forEach(function(id){
+      var el=document.getElementById(id); if(el) el.value='';
+    });
+    document.getElementById('swtAddForm').style.display='none';
+  }
+};
+
+// ══════════════════════════════════════════
+// INJECT SUB-TABS INTO SWING SCREEN
+// ══════════════════════════════════════════
+(function injectSwingTabs() {
+  function doInject() {
+    var scrSwing = document.getElementById('scrSwing'); if(!scrSwing) return;
+    var inner    = scrSwing.querySelector('.screen-inner'); if(!inner) return;
+
+    // Sub-tab bar
+    var tabBar = document.createElement('div');
+    tabBar.style.cssText = 'display:flex;gap:5px;margin-bottom:10px';
+    tabBar.innerHTML =
+      '<button id="swtTabScan"    class="sim-tab on" onclick="V9.swt.switchTab(\'scan\')"   style="flex:1">📊 SCAN</button>'+
+      '<button id="swtTabTracker" class="sim-tab"    onclick="V9.swt.switchTab(\'tracker\')" style="flex:1">📌 TRACKER <span id="swtBadge" style="display:none;background:var(--gold);color:#000;border-radius:10px;padding:0 5px;font-size:.26rem;margin-left:3px">0</span></button>';
+
+    inner.insertBefore(tabBar, inner.firstChild);
+
+    // Wrapper for existing scan content
+    var scanWrap = document.createElement('div');
+    scanWrap.id  = 'swtScanContent';
+    // Move all existing children except tab bar into scan wrap
+    var children = Array.from(inner.children).filter(function(c){return c!==tabBar;});
+    children.forEach(function(c){ scanWrap.appendChild(c); });
+    inner.appendChild(scanWrap);
+
+    // Tracker content div
+    var trackerWrap = document.createElement('div');
+    trackerWrap.id  = 'swtTrackerContent';
+    trackerWrap.style.display = 'none';
+    inner.appendChild(trackerWrap);
+
+    V9.swt.renderTracker();
+    console.log('NSE PRO V9 — Swing Tracker injected');
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', doInject);
+  else setTimeout(doInject, 250);
+})();
+
+// ── TAB SWITCHER ──
+V9.swt.switchTab = function(tab) {
+  V9.state.swingTracker.activeTab = tab;
+  var scan    = document.getElementById('swtScanContent');
+  var tracker = document.getElementById('swtTrackerContent');
+  var tabS    = document.getElementById('swtTabScan');
+  var tabT    = document.getElementById('swtTabTracker');
+  if(scan)    scan.style.display    = tab==='scan'?'block':'none';
+  if(tracker) tracker.style.display = tab==='tracker'?'block':'none';
+  if(tabS)    tabS.className        = 'sim-tab'+(tab==='scan'?' on':'');
+  if(tabT)    tabT.className        = 'sim-tab'+(tab==='tracker'?' on':'');
+  if(tab==='tracker') V9.swt.renderTracker();
+};
+
+// ══════════════════════════════════════════
+// ADD "📌 TRACK" BUTTON TO SWING SCAN CARDS
+// ══════════════════════════════════════════
+var _origBuildSwingCard = V9.ui.buildSwingCard;
+V9.ui.buildSwingCard = function(s) {
+  var html = _origBuildSwingCard.call(this, s);
+  // Add track button before closing div
+  var trackBtn =
+    '<button onclick="V9.swt.addFromScan(\''+s.sym+'\')" '+
+    'style="width:100%;margin-top:6px;padding:6px;'+
+    'background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.25);'+
+    'border-radius:var(--r3);color:var(--gold);font-family:\'JetBrains Mono\';'+
+    'font-size:.3rem;cursor:pointer">📌 TRACK THIS SWING</button>';
+  html = html.slice(0,-6) + trackBtn + html.slice(-6);
+  return html;
+};
+
+// ══════════════════════════════════════════
+// HOOK INTO SCAN PIPELINE
+// ══════════════════════════════════════════
+var _origRebuildSWT = V9.data.rebuildAllStocks;
+V9.data.rebuildAllStocks = function() {
+  _origRebuildSWT.call(this);
+  try {
+    V9.swt.processAll();
+    // Update badge
+    var count  = Object.keys(V9.state.swingTracker.positions).length;
+    var badge  = document.getElementById('swtBadge');
+    if(badge) {
+      badge.textContent    = count;
+      badge.style.display  = count>0?'inline':'none';
+    }
+  } catch(e){ console.warn('Swing Tracker error:', e); }
+};
+
+// ── LOAD ON STARTUP ──
+V9.swt.load();
+
+// ══════════════════════════════════════════
+// CLOUDFLARE WORKER HANDLER
+// Add to cloudflare-worker-v9.js:
+//
+// if(action==='swing_tracker_v9') {
+//   const sym=p.get('sym'), status=p.get('status');
+//   const action_rec=p.get('action_rec'), reason=p.get('reason');
+//   const entry=p.get('entry'), current=p.get('current');
+//   const pnl=p.get('pnl_pct'), sl=p.get('sl'), target=p.get('target');
+//   const days=p.get('days'), conf=p.get('conf'), time=p.get('time');
+//   const pnlN=parseFloat(pnl);
+//   const icon=status==='TARGET'?'🎯':status==='EXIT'?'🔴':status==='WATCH'?'⚠️':'🟢';
+//   await tg(
+//     icon+' <b>SWING '+status+' — '+sym+'</b>\n\n'+
+//     '📍 <b>Action: '+action_rec+'</b>\n'+
+//     reason+'\n\n'+
+//     '💵 Entry: ₹'+entry+' → Current: ₹'+current+'\n'+
+//     'P&L: <b>'+(pnlN>=0?'+':'')+pnl+'%</b>\n'+
+//     'SL: ₹'+sl+' | Target: ₹'+target+'\n'+
+//     'Days held: '+days+'\n'+
+//     'Confidence: '+conf+'%\n\n'+
+//     (status==='TARGET'?'🎯 <b>TAKE PROFIT on Zerodha!</b>':
+//      status==='EXIT'?'🔴 <b>CLOSE on Zerodha NOW</b>':
+//      status==='WATCH'?'👁️ Monitor closely':'📈 Continue holding')+
+//     '\n⏰ '+time+' | 🤖 NSE PRO V9'
+//   );
+//   return jr({status:'ok'});
+// }
+// ══════════════════════════════════════════
+// ══════════════════════════════════════════
+// NSE PRO V9 — PATCH 3 END
+// PASTE PART 8 DIRECTLY BELOW THIS LINE
+// ══════════════════════════════════════════
 // ═══════════════════════════════════════════
 // NSE PRO V9 BETA — PART 8 (FINAL)
 // Boot Sequence + V9.init + Closing Tags
